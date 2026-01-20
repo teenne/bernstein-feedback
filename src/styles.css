@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties for theming */
+:root {
+  --feedback-bg: #ffffff;
+  --feedback-bg-secondary: #f9fafb;
+  --feedback-text: #111827;
+  --feedback-text-muted: #6b7280;
+  --feedback-border: #e5e7eb;
+  --feedback-primary: #3b82f6;
+  --feedback-primary-hover: #2563eb;
+  --feedback-error: #ef4444;
+  --feedback-success: #22c55e;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --feedback-bg: #1f2937;
+    --feedback-bg-secondary: #374151;
+    --feedback-text: #f9fafb;
+    --feedback-text-muted: #9ca3af;
+    --feedback-border: #4b5563;
+    --feedback-primary: #60a5fa;
+    --feedback-primary-hover: #3b82f6;
+    --feedback-error: #f87171;
+    --feedback-success: #4ade80;
+  }
+}
+
+/* Override dark mode when host explicitly sets light theme */
+[data-theme="light"] {
+  --feedback-bg: #ffffff;
+  --feedback-bg-secondary: #f9fafb;
+  --feedback-text: #111827;
+  --feedback-text-muted: #6b7280;
+  --feedback-border: #e5e7eb;
+  --feedback-primary: #3b82f6;
+  --feedback-primary-hover: #2563eb;
+  --feedback-error: #ef4444;
+  --feedback-success: #22c55e;
+}
+
+/* Override when host explicitly sets dark theme */
+[data-theme="dark"] {
+  --feedback-bg: #1f2937;
+  --feedback-bg-secondary: #374151;
+  --feedback-text: #f9fafb;
+  --feedback-text-muted: #9ca3af;
+  --feedback-border: #4b5563;
+  --feedback-primary: #60a5fa;
+  --feedback-primary-hover: #3b82f6;
+  --feedback-error: #f87171;
+  --feedback-success: #4ade80;
+}

@@ -1,67 +1,225 @@
-# Bernstein feedback
+# @bernstein/feedback
 
-Bernstein feedback is a drop-in feedback component for web apps.
+[![npm version](https://img.shields.io/npm/v/@bernstein/feedback.svg)](https://www.npmjs.com/package/@bernstein/feedback)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18+-61dafb.svg)](https://reactjs.org/)
 
-It is designed to be:
-- simple to adopt across many projects
-- backend-agnostic through adapters
-- privacy-safe by default
-- compatible with the Bernstein event contract
+A drop-in feedback widget for React applications that captures user feedback with automatic context collection. Part of the [Bernstein](https://github.com/teenne/bernstein) observability ecosystem.
 
-The widget captures enough context to make feedback actionable, then submits structured events to an HTTP endpoint.
+---
 
-## What it provides
+## Why @bernstein/feedback?
 
-- UI component that opens a panel and submits feedback
-- Two modes
-  - Feedback mode for product feedback
-  - Bug mode for reproducible issues
-- Automatic context capture
-  - url and route
-  - environment and app version (if provided)
-  - viewport
-  - recent console errors
-  - network request summary (no bodies by default)
-  - user journey breadcrumbs (basic navigation history)
+Getting useful feedback from users is hard. When someone reports "it doesn't work," you're left guessing what they saw, what they clicked, and what went wrong. This widget solves that by automatically capturing the context needed to understand and reproduce issues.
 
-## Backends
+**The problem:**
+- Users can't describe technical issues accurately
+- Screenshots miss the sequence of events that led to a bug
+- Console errors and network failures are invisible to users
+- Feedback goes to email/Slack where it gets lost
 
-Supported backend adapters:
-- HTTP endpoint (recommended)
-- Local storage for development with JSON export
+**The solution:**
+- Automatic capture of console errors, failed network requests, and user actions
+- Structured event format that integrates with your existing tools
+- Privacy-safe defaults that respect user data
+- Drop-in component that works with any React app
 
-You can point it at:
-- your own backend
-- the Bernstein local API included in `bernstein-sdk`
-- the commercial Bernstein Cloud service later
+---
 
-## Quick start
+## Features
 
-Install the package and render the widget at app root. Configure an endpoint that accepts Bernstein events.
+- **Two feedback modes** — General feedback for suggestions, bug reports for issues
+- **Automatic context capture** — URL, viewport, console errors, network errors, user breadcrumbs
+- **Privacy-safe by default** — No request/response bodies, no form values, no keystrokes
+- **Configurable redaction** — Remove sensitive data with regex patterns before sending
+- **Backend-agnostic** — HTTP adapter for any endpoint, localStorage for development
+- **Themeable** — CSS custom properties with automatic dark mode support
+- **Lightweight** — ~50KB gzipped, tree-shakeable, minimal dependencies
+- **TypeScript-first** — Full type definitions and Zod schemas included
 
-Example configuration:
-- endpoint: `/api/coord/events` or `/api/coord/events/batch`
-- project id: your project identifier
-- optional API key header if required by your backend
+---
 
-## Privacy defaults
+## Installation
 
-Defaults are conservative:
-- no request bodies
-- no response bodies
-- no form field capture
-- no keystroke capture
+```bash
+npm install @bernstein/feedback
+```
 
-Redaction hooks are provided so projects can remove sensitive fields before sending.
+### Peer Dependencies
 
-## Relationship to Bernstein SDK
+React 18 or later is required.
 
-This repo consumes:
-- the Bernstein event schema
-- shared types
+---
 
-The backend contract is defined in the SDK repo. This widget is an implementation of that contract focused on feedback capture.
+## Quick Start
 
-## Licence
+```tsx
+import { FeedbackProvider, FeedbackButton, FeedbackDialog } from "@bernstein/feedback";
+import { httpAdapter } from "@bernstein/feedback/adapters";
+import "@bernstein/feedback/styles.css";
 
-Apache 2.0.
+function App() {
+  return (
+    <FeedbackProvider
+      config={{
+        adapter: httpAdapter({ endpoint: "/api/feedback" }),
+        projectId: "my-app",
+      }}
+    >
+      <YourApp />
+      <FeedbackDialog />
+      <FeedbackButton position="bottom-right" />
+    </FeedbackProvider>
+  );
+}
+```
+
+---
+
+## Configuration
+
+| Prop | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| adapter | FeedbackAdapter | Yes | — | Backend adapter for submitting feedback |
+| projectId | string | Yes | — | Project identifier included in events |
+| redact | RegExp[] | No | [] | Patterns to redact from captured URLs |
+| appVersion | string | No | — | App version to include in context |
+| userId | string | No | — | User ID to include in events |
+| enableScreenshot | boolean | No | true | Enable screenshot capture |
+| maxConsoleErrors | number | No | 10 | Max console errors to capture |
+| maxNetworkErrors | number | No | 5 | Max network errors to capture |
+| maxBreadcrumbs | number | No | 20 | Max breadcrumbs to capture |
+
+---
+
+## Components
+
+### FeedbackButton
+
+```tsx
+<FeedbackButton position="bottom-right" label="Feedback" />
+```
+
+### FeedbackIconButton
+
+```tsx
+<FeedbackIconButton position="bottom-right" />
+```
+
+### Programmatic Control
+
+```tsx
+const { openFeedback, openBugReport } = useFeedback();
+
+openBugReport({ title: "Error occurred", severity: "high" });
+```
+
+---
+
+## Adapters
+
+### HTTP Adapter
+
+```tsx
+import { httpAdapter } from "@bernstein/feedback/adapters";
+
+httpAdapter({
+  endpoint: "https://api.example.com/feedback",
+  headers: { "X-API-Key": "key" },
+  timeout: 10000,
+});
+```
+
+### LocalStorage Adapter (Development)
+
+```tsx
+import { localStorageAdapter } from "@bernstein/feedback/adapters";
+
+const adapter = localStorageAdapter({ logToConsole: true });
+adapter.exportEvents();
+```
+
+### Console Adapter (Testing)
+
+```tsx
+import { consoleAdapter } from "@bernstein/feedback/adapters";
+```
+
+---
+
+## Context Capture
+
+Automatically captures:
+- URL and viewport
+- Console errors (last 10)
+- Network errors (last 5)
+- User breadcrumbs - clicks and navigation (last 20)
+
+### Custom Breadcrumbs
+
+```tsx
+const { addBreadcrumb } = useFeedback();
+addBreadcrumb({ type: "custom", target: "checkout-started" });
+```
+
+---
+
+## Theming
+
+```css
+:root {
+  --feedback-primary: #3b82f6;
+  --feedback-bg: #ffffff;
+  --feedback-text: #111827;
+}
+```
+
+Dark mode: `<html data-theme="dark">`
+
+---
+
+## Event Schema
+
+```typescript
+interface FeedbackEvent {
+  type: "feedback" | "bug_report";
+  project_id: string;
+  timestamp: string;
+  title: string;
+  description: string;
+  category?: "bug" | "improvement" | "feature" | "question" | "other";
+  severity?: "low" | "medium" | "high" | "critical";
+  context: CapturedContext;
+  screenshot?: string;
+  user_id?: string;
+}
+```
+
+---
+
+## Privacy & Security
+
+**Not captured by default:** Request/response bodies, form values, keystrokes, cookies.
+
+**Redaction:**
+```tsx
+redact: [/token=[^&]+/gi, /password/gi]
+```
+
+---
+
+## Bernstein Ecosystem
+
+| Package | Description |
+|---------|-------------|
+| [bernstein](https://github.com/teenne/bernstein) | Documentation and architecture |
+| [bernstein-sdk](https://github.com/teenne/bernstein-sdk) | Core SDK for event tracking |
+| **bernstein-feedback** | UI feedback widget (this package) |
+| [bernstein-backend](https://github.com/teenne/bernstein-backend) | Backend for storage |
+
+---
+
+## License
+
+Apache 2.0

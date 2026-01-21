@@ -90,13 +90,59 @@ No configuration options.
 
 ## Creating a Custom Adapter
 
-An adapter is a function that receives a `FeedbackEvent` and returns a `Promise<void>`:
+An adapter implements the `FeedbackAdapter` interface:
 
 ```tsx
 import type { FeedbackAdapter, FeedbackEvent } from '@bernstein/feedback'
 
-const customAdapter: FeedbackAdapter = async (event: FeedbackEvent) => {
-  // Send to your custom backend
-  await myAnalyticsService.track('feedback', event)
+interface AdapterResult {
+  success: boolean;
+  id?: string;      // Feedback reference ID
+  error?: string;   // Error message if failed
 }
+
+const customAdapter = (): FeedbackAdapter => ({
+  async submit(event: FeedbackEvent): Promise<AdapterResult> {
+    try {
+      const response = await myBackend.saveFeedback(event);
+      return { success: true, id: response.id };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+});
 ```
+
+---
+
+## Recommended Adapters (Coming Soon)
+
+These adapters are planned for future releases based on portfolio analysis:
+
+### Tier 1 - High Value
+
+| Adapter | Purpose | Status |
+|---------|---------|--------|
+| `webhookAdapter` | Send to Slack, Discord, Teams | Planned |
+| `supabaseAdapter` | Direct Supabase table insert | Planned |
+| `bernsteinBackendAdapter` | Native bernstein-backend integration | Planned |
+
+### Tier 2 - Medium Value
+
+| Adapter | Purpose | Status |
+|---------|---------|--------|
+| `indexedDBAdapter` | Large offline storage (50MB+) | Planned |
+| `emailAdapter` | Send via SMTP or email services | Planned |
+
+### Contributing
+
+Want to contribute an adapter? See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+
+The adapter interface is simple - implement a single `submit()` method that:
+1. Accepts a `FeedbackEvent`
+2. Returns `{ success: true, id?: string }` on success
+3. Returns `{ success: false, error: string }` on failure
+4. Never throws unhandled exceptions

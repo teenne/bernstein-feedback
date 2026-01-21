@@ -228,4 +228,8 @@ export interface FeedbackConfig {
   maxNetworkErrors?: number;
   /** Maximum breadcrumbs to capture (default: 20) */
   maxBreadcrumbs?: number;
+
+  // Toast settings
+  /** Duration to show toast in ms (default: 5000, set to 0 to disable auto-dismiss) */
+  toastDuration?: number;
 }

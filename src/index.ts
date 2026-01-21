@@ -2,6 +2,7 @@
 export { FeedbackProvider, useFeedback } from './context';
 export { FeedbackDialog } from './components/FeedbackDialog';
 export { FeedbackButton, FeedbackIconButton } from './components/FeedbackButton';
+export { FeedbackToast } from './components/FeedbackToast';
 
 // Schema exports
 export {

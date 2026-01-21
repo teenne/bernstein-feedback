@@ -41,11 +41,6 @@ export function FeedbackDialog() {
 
   // Get recent steps from context for bug reports
   const context = captureContext();
-  const recentSteps = context.breadcrumbs
-    .slice(-5)
-    .map((b) => `${b.type}: ${b.target}`)
-    .join('\n');
-
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {

@@ -24,12 +24,20 @@ interface HighlightedElement {
   text?: string;
 }
 
+interface Toast {
+  type: 'success' | 'error';
+  message: string;
+  feedbackId?: string;
+}
+
 interface FeedbackContextValue {
   config: FeedbackConfig;
   isOpen: boolean;
   isSubmitting: boolean;
   submitError: string | null;
   lastReportId: string | null;
+  toast: Toast | null;
+  dismissToast: () => void;
   openFeedback: (initialState?: Partial<FeedbackFormState>) => void;
   openBugReport: (initialState?: Partial<FeedbackFormState>) => void;
   /** Quick API to report a bug with prefilled text */
@@ -63,6 +71,8 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [initialFormState, setInitialFormState] = useState<Partial<FeedbackFormState>>({});
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Captured context storage
   const consoleErrors = useRef<ConsoleError[]>([]);
@@ -192,6 +202,31 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     [maxBreadcrumbs]
   );
 
+  const dismissToast = useCallback(() => {
+    setToast(null);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showToast = useCallback((newToast: Toast) => {
+    // Clear any existing timeout
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    
+    setToast(newToast);
+    
+    const duration = config.toastDuration ?? 5000;
+    if (duration > 0) {
+      toastTimeoutRef.current = setTimeout(() => {
+        setToast(null);
+        toastTimeoutRef.current = null;
+      }, duration);
+    }
+  }, [config.toastDuration]);
+
   const captureContext = useCallback((): CapturedContext => {
     return {
       // URL and routing
@@ -273,7 +308,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           consoleErrors: formState.includeTechnicalDetails ? fullContext.consoleErrors : [],
           networkErrors: formState.includeTechnicalDetails ? fullContext.networkErrors : [],
           breadcrumbs: formState.includeRecentSteps ? fullContext.breadcrumbs : [],
-          userAgent: formState.includeTechnicalDetails ? fullContext.userAgent : undefined,
+          userAgent: formState.includeTechnicalDetails ? fullContext.userAgent : '',
           viewport: formState.includeTechnicalDetails ? fullContext.viewport : { width: 0, height: 0 },
         };
 
@@ -308,19 +343,33 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         if (result.success) {
           setLastReportId(result.id || null);
           close();
+          showToast({
+            type: 'success',
+            message: 'Thanks for your feedback\!',
+            feedbackId: result.id,
+          });
           return { success: true, reportId: result.id };
         } else {
           setSubmitError(result.error || 'Failed to submit feedback');
+          showToast({
+            type: 'error',
+            message: result.error || 'Failed to submit feedback',
+          });
           return { success: false };
         }
       } catch (err) {
-        setSubmitError(err instanceof Error ? err.message : 'An unexpected error occurred');
+        const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
+        setSubmitError(errorMessage);
+        showToast({
+          type: 'error',
+          message: errorMessage,
+        });
         return { success: false };
       } finally {
         setIsSubmitting(false);
       }
     },
-    [config, captureContext, close]
+    [config, captureContext, close, showToast]
   );
 
   const value: FeedbackContextValue = {
@@ -329,6 +378,8 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     isSubmitting,
     submitError,
     lastReportId,
+    toast,
+    dismissToast,
     openFeedback,
     openBugReport,
     reportBug,

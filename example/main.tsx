@@ -1,22 +1,34 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { FeedbackProvider, FeedbackButton, FeedbackDialog } from '../src'
+import { FeedbackProvider, FeedbackButton, FeedbackDialog, FeedbackToast } from '../src'
 import { consoleAdapter, localStorageAdapter } from '../src/adapters'
+import { supabaseAdapter, isSupabaseConfigured } from './supabase-adapter'
 import '../src/styles.css'
 import './styles.css'
 
-function App() {
-  const [adapter, setAdapter] = React.useState<'console' | 'localStorage'>('console')
+type AdapterType = 'console' | 'localStorage' | 'supabase'
 
-  const activeAdapter = adapter === 'console'
-    ? consoleAdapter()
-    : localStorageAdapter({ key: 'feedback-demo' })
+function App() {
+  const [adapter, setAdapter] = React.useState<AdapterType>(
+    isSupabaseConfigured ? 'supabase' : 'console'
+  )
+
+  const getAdapter = () => {
+    switch (adapter) {
+      case 'supabase':
+        return supabaseAdapter()
+      case 'localStorage':
+        return localStorageAdapter({ key: 'feedback-demo' })
+      default:
+        return consoleAdapter()
+    }
+  }
 
   return (
     <FeedbackProvider
       config={{
         projectId: 'demo-project',
-        adapter: activeAdapter,
+        adapter: getAdapter(),
 
         // Screen identity
         screenId: 'demo-home',
@@ -40,19 +52,27 @@ function App() {
               className={adapter === 'console' ? 'active' : ''}
               onClick={() => setAdapter('console')}
             >
-              Console Adapter
+              Console
             </button>
             <button
               className={adapter === 'localStorage' ? 'active' : ''}
               onClick={() => setAdapter('localStorage')}
             >
-              LocalStorage Adapter
+              LocalStorage
+            </button>
+            <button
+              className={adapter === 'supabase' ? 'active' : ''}
+              onClick={() => setAdapter('supabase')}
+              disabled={!isSupabaseConfigured}
+              title={!isSupabaseConfigured ? 'Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env' : ''}
+            >
+              Supabase {!isSupabaseConfigured && '(not configured)'}
             </button>
           </div>
           <p className="hint">
-            {adapter === 'console'
-              ? 'Feedback will be logged to the browser console.'
-              : 'Feedback will be saved to localStorage (key: feedback-demo).'}
+            {adapter === 'console' && 'Feedback will be logged to the browser console.'}
+            {adapter === 'localStorage' && 'Feedback will be saved to localStorage (key: feedback-demo).'}
+            {adapter === 'supabase' && 'Feedback will be saved to your Supabase database.'}
           </p>
         </section>
 
@@ -83,7 +103,7 @@ function App() {
           <ol>
             <li>Click the feedback button in the bottom-right corner</li>
             <li>Fill out the feedback form or bug report</li>
-            <li>Submit and check the console/localStorage for the captured data</li>
+            <li>Submit and check the {adapter === 'console' ? 'console' : adapter === 'localStorage' ? 'localStorage' : 'Supabase dashboard'} for the captured data</li>
           </ol>
         </section>
 
@@ -114,10 +134,29 @@ function App() {
             </button>
           </section>
         )}
+
+        {!isSupabaseConfigured && (
+          <section className="setup-hint">
+            <h2>Supabase Setup</h2>
+            <p>To enable Supabase integration:</p>
+            <ol>
+              <li>Create a <code>.env</code> file in the project root</li>
+              <li>Add your Supabase credentials:
+                <pre>
+{`VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key`}
+                </pre>
+              </li>
+              <li>Run the SQL from <code>examples/supabase-setup.sql</code> in your Supabase SQL Editor</li>
+              <li>Restart the dev server</li>
+            </ol>
+          </section>
+        )}
       </div>
 
       <FeedbackButton />
       <FeedbackDialog />
+      <FeedbackToast />
     </FeedbackProvider>
   )
 }

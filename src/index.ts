@@ -14,6 +14,7 @@ export {
   FeedbackTypeSchema,
   FeedbackCategorySchema,
   SeveritySchema,
+  ImpactSchema,
 } from './schemas';
 
 // Type exports
@@ -27,6 +28,7 @@ export type {
   FeedbackType,
   FeedbackCategory,
   Severity,
+  Impact,
   FeedbackFormState,
   FeedbackAdapter,
   FeedbackConfig,

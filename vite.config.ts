@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react';
 import dts from 'vite-plugin-dts';
 import { resolve } from 'path';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  root: command === 'serve' ? 'example' : undefined,
   plugins: [
     react(),
     dts({
@@ -37,4 +38,4 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
-});
+}));

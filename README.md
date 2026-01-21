@@ -21,22 +21,25 @@ Getting useful feedback from users is hard. When someone reports "it doesn't wor
 
 **The solution:**
 - Automatic capture of console errors, failed network requests, and user actions
-- Structured event format that integrates with your existing tools
-- Privacy-safe defaults that respect user data
-- Drop-in component that works with any React app
+- User-friendly impact selection ("Blocks me" / "Annoying" / "Minor")
+- Consent-based context sharing with clear "We'll include" toggles
+- Privacy-safe defaults with automatic secret redaction
 
 ---
 
 ## Features
 
-- **Two feedback modes** — General feedback for suggestions, bug reports for issues
+- **Three feedback modes** — Feedback, Feature Request, Bug Report
+- **User-friendly bug triage** — "How bad is it?" with Blocks me / Annoying / Minor
 - **Automatic context capture** — URL, viewport, console errors, network errors, user breadcrumbs
+- **Screenshot capture** — One-click screenshot with html2canvas
+- **Highlight mode** — Let users click to highlight a specific element
+- **Consent toggles** — "We'll include" section with clear opt-in/opt-out
 - **Privacy-safe by default** — No request/response bodies, no form values, no keystrokes
-- **Configurable redaction** — Remove sensitive data with regex patterns before sending
+- **Auto-redaction** — Emails, phone numbers, credit cards, API keys automatically redacted
+- **Screen identity** — Track which screen/view feedback came from
 - **Backend-agnostic** — HTTP adapter for any endpoint, localStorage for development
 - **Themeable** — CSS custom properties with automatic dark mode support
-- **Lightweight** — ~50KB gzipped, tree-shakeable, minimal dependencies
-- **TypeScript-first** — Full type definitions and Zod schemas included
 
 ---
 
@@ -63,13 +66,25 @@ function App() {
   return (
     <FeedbackProvider
       config={{
-        adapter: httpAdapter({ endpoint: "/api/feedback" }),
         projectId: "my-app",
+        adapter: httpAdapter({ endpoint: "/api/feedback" }),
+
+        // Screen identity (update on navigation)
+        screenId: "dashboard",
+        pageName: "Dashboard",
+
+        // Build identity
+        appVersion: "2.1.0",
+        env: "production",
+
+        // User identity (minimal)
+        userId: currentUser?.id,
+        tenantId: currentUser?.orgId,
       }}
     >
       <YourApp />
+      <FeedbackButton />
       <FeedbackDialog />
-      <FeedbackButton position="bottom-right" />
     </FeedbackProvider>
   );
 }
@@ -79,17 +94,47 @@ function App() {
 
 ## Configuration
 
-| Prop | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| adapter | FeedbackAdapter | Yes | — | Backend adapter for submitting feedback |
-| projectId | string | Yes | — | Project identifier included in events |
-| redact | RegExp[] | No | [] | Patterns to redact from captured URLs |
-| appVersion | string | No | — | App version to include in context |
-| userId | string | No | — | User ID to include in events |
-| enableScreenshot | boolean | No | true | Enable screenshot capture |
-| maxConsoleErrors | number | No | 10 | Max console errors to capture |
-| maxNetworkErrors | number | No | 5 | Max network errors to capture |
-| maxBreadcrumbs | number | No | 20 | Max breadcrumbs to capture |
+### Required
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `projectId` | `string` | Project identifier |
+| `adapter` | `FeedbackAdapter` | Backend adapter |
+
+### Screen Identity
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `screenId` | `string` | Stable screen ID (e.g., `'checkout'`) |
+| `pageName` | `string` | Human-readable page name |
+
+### Build Identity
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `appVersion` | `string` | App version |
+| `buildSha` | `string` | Git commit SHA |
+| `env` | `'production' \| 'staging' \| 'development' \| 'test'` | Environment |
+
+### User Identity
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `userId` | `string` | Internal user ID |
+| `tenantId` | `string` | Tenant/org ID |
+| `role` | `string` | User role |
+
+### Privacy & Limits
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `redact` | `RegExp[]` | `[]` | URL patterns to redact |
+| `enableScreenshot` | `boolean` | `true` | Enable screenshot capture |
+| `maxConsoleErrors` | `number` | `10` | Max console errors |
+| `maxNetworkErrors` | `number` | `5` | Max network errors |
+| `maxBreadcrumbs` | `number` | `20` | Max breadcrumbs |
+
+See [docs/configuration.md](docs/configuration.md) for full details.
 
 ---
 
@@ -107,12 +152,29 @@ function App() {
 <FeedbackIconButton position="bottom-right" />
 ```
 
-### Programmatic Control
+---
+
+## Programmatic API
 
 ```tsx
-const { openFeedback, openBugReport } = useFeedback();
+const {
+  openFeedback,     // Open in feedback mode
+  openBugReport,    // Open in bug report mode
+  reportBug,        // Quick API with prefilled text
+  addBreadcrumb,    // Track custom breadcrumb
+  lastReportId,     // ID of last submitted report
+} = useFeedback();
 
-openBugReport({ title: "Error occurred", severity: "high" });
+// Quick bug report
+reportBug({ title: "Error occurred", description: "Details..." });
+
+// Custom breadcrumb
+addBreadcrumb({ type: "custom", target: "checkout-started" });
+
+// Show confirmation
+if (lastReportId) {
+  console.log(`Thanks! Report ID: ${lastReportId}`);
+}
 ```
 
 ---
@@ -136,8 +198,7 @@ httpAdapter({
 ```tsx
 import { localStorageAdapter } from "@bernstein/feedback/adapters";
 
-const adapter = localStorageAdapter({ logToConsole: true });
-adapter.exportEvents();
+localStorageAdapter({ key: "feedback-dev" });
 ```
 
 ### Console Adapter (Testing)
@@ -148,19 +209,84 @@ import { consoleAdapter } from "@bernstein/feedback/adapters";
 
 ---
 
-## Context Capture
+## Event Schema
 
-Automatically captures:
-- URL and viewport
-- Console errors (last 10)
-- Network errors (last 5)
-- User breadcrumbs - clicks and navigation (last 20)
+```typescript
+interface FeedbackEvent {
+  type: "feedback" | "bug_report" | "feature_request";
+  project_id: string;
+  timestamp: string;
 
-### Custom Breadcrumbs
+  // User input
+  title: string;
+  description: string;
+  impact?: "blocks_me" | "annoying" | "minor";
+
+  // Context (based on consent toggles)
+  context: {
+    url: string;
+    route?: string;
+    screenId?: string;
+    pageName?: string;
+    appVersion?: string;
+    buildSha?: string;
+    env?: "production" | "staging" | "development" | "test";
+    viewport: { width: number; height: number };
+    userAgent?: string;
+    consoleErrors: ConsoleError[];
+    networkErrors: NetworkError[];
+    breadcrumbs: Breadcrumb[];
+  };
+
+  // Optional
+  screenshot?: string; // Base64
+  highlighted_element?: {
+    selector: string;
+    bounding_box: { x: number; y: number; width: number; height: number };
+    tag_name: string;
+    text?: string;
+  };
+
+  // Identity
+  user_id?: string;
+  tenant_id?: string;
+  role?: string;
+}
+```
+
+---
+
+## Privacy & Security
+
+### What's NOT captured
+
+- Request/response bodies
+- Form values
+- Keystrokes
+- Cookies
+- Full DOM HTML
+
+### What IS captured (with consent)
+
+- Network errors: endpoint path, status, duration, request ID (no bodies)
+- Console errors: message and stack trace
+- Breadcrumbs: click targets, navigation events
+
+### Automatic Redaction
+
+User-provided text is automatically scanned and redacted for:
+- Email addresses → `[EMAIL]`
+- Phone numbers → `[PHONE]`
+- Credit card numbers → `[CARD]`
+- SSNs → `[SSN]`
+- API keys/tokens → `[API_KEY]`, `[TOKEN]`
+- AWS keys → `[AWS_KEY]`
+- Passwords → `[REDACTED]`
+
+### URL Redaction
 
 ```tsx
-const { addBreadcrumb } = useFeedback();
-addBreadcrumb({ type: "custom", target: "checkout-started" });
+redact: [/token=[^&]+/gi, /password/gi]
 ```
 
 ---
@@ -177,46 +303,7 @@ addBreadcrumb({ type: "custom", target: "checkout-started" });
 
 Dark mode: `<html data-theme="dark">`
 
----
-
-## Event Schema
-
-```typescript
-interface FeedbackEvent {
-  type: "feedback" | "bug_report";
-  project_id: string;
-  timestamp: string;
-  title: string;
-  description: string;
-  category?: "bug" | "improvement" | "feature" | "question" | "other";
-  severity?: "low" | "medium" | "high" | "critical";
-  context: CapturedContext;
-  screenshot?: string;
-  user_id?: string;
-}
-```
-
----
-
-## Privacy & Security
-
-**Not captured by default:** Request/response bodies, form values, keystrokes, cookies.
-
-**Redaction:**
-```tsx
-redact: [/token=[^&]+/gi, /password/gi]
-```
-
----
-
-## Bernstein Ecosystem
-
-| Package | Description |
-|---------|-------------|
-| [bernstein](https://github.com/teenne/bernstein) | Documentation and architecture |
-| [bernstein-sdk](https://github.com/teenne/bernstein-sdk) | Core SDK for event tracking |
-| **bernstein-feedback** | UI feedback widget (this package) |
-| [bernstein-backend](https://github.com/teenne/bernstein-backend) | Backend for storage |
+See [docs/theming.md](docs/theming.md) for details.
 
 ---
 

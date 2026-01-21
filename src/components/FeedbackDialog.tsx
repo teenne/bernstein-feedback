@@ -446,9 +446,9 @@ function ConsentToggle({
           checked={checked}
           onCheckedChange={onCheckedChange}
           disabled={disabled}
-          className="bf-w-9 bf-h-5 bf-bg-feedback-bg-secondary bf-rounded-full bf-relative bf-border bf-border-feedback-border data-[state=checked]:bf-bg-feedback-primary data-[state=checked]:bf-border-feedback-primary bf-transition-colors disabled:bf-opacity-50"
+          className="bf-w-9 bf-h-5 bf-bg-feedback-bg-secondary bf-rounded-full bf-relative bf-flex bf-items-center bf-border bf-border-feedback-border data-[state=checked]:bf-bg-feedback-primary data-[state=checked]:bf-border-feedback-primary bf-transition-colors disabled:bf-opacity-50"
         >
-          <Switch.Thumb className="bf-block bf-w-4 bf-h-4 bf-bg-white bf-rounded-full bf-shadow bf-transition-transform bf-translate-x-0.5 data-[state=checked]:bf-translate-x-4" />
+          <Switch.Thumb className="bf-block bf-w-4 bf-h-4 bf-bg-white bf-rounded-full bf-shadow bf-transition-transform bf-translate-x-0.5 data-[state=checked]:bf-translate-x-[18px]" />
         </Switch.Root>
       </label>
       {children}

@@ -140,7 +140,7 @@ function App() {
             <h2>Supabase Setup</h2>
             <p>To enable Supabase integration:</p>
             <ol>
-              <li>Create a <code>.env</code> file in the project root</li>
+              <li>Create a <code>.env</code> file in the <code>example/</code> folder</li>
               <li>Add your Supabase credentials:
                 <pre>
 {`VITE_SUPABASE_URL=https://your-project.supabase.co

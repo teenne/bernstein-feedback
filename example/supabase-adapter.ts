@@ -20,25 +20,32 @@ export function supabaseAdapter(): FeedbackAdapter {
 
   return {
     async submit(event: FeedbackEvent) {
+      console.log('Submitting to Supabase...', { event })
+
+      const insertData = {
+        project_id: event.project_id,
+        type: event.type,
+        title: event.title,
+        description: event.description,
+        category: event.category,
+        impact: event.impact,
+        email: event.email,
+        context: event.context,
+        screenshot: event.screenshot,
+        highlighted_element: event.highlighted_element,
+        user_id: event.user_id,
+        tenant_id: event.tenant_id,
+      }
+
+      console.log('Insert data:', insertData)
+
       const { data, error } = await supabase
         .from('feedback')
-        .insert({
-          project_id: event.project_id,
-          type: event.type,
-          title: event.title,
-          description: event.description,
-          category: event.category,
-          impact: event.impact,
-          email: event.email,
-          context: event.context,
-          screenshot: event.screenshot,
-          highlighted_element: event.highlighted_element,
-          user_id: event.user_id,
-          tenant_id: event.tenant_id,
-          created_at: event.timestamp,
-        })
+        .insert(insertData)
         .select('id')
         .single()
+
+      console.log('Supabase response:', { data, error })
 
       if (error) {
         console.error('Supabase feedback error:', error)

@@ -1,0 +1,80 @@
+# Branch Protection Configuration
+# Apply via GitHub API or UI: Settings > Branches > Branch protection rules
+#
+# API endpoint: PUT /repos/{owner}/{repo}/branches/{branch}/protection
+# CLI: gh api repos/{owner}/{repo}/branches/main/protection -X PUT --input branch-protection.json
+
+branches:
+  - name: main
+    protection:
+      # Require pull request before merging
+      required_pull_request_reviews:
+        # Number of required approving reviews
+        required_approving_review_count: 1
+
+        # Dismiss stale reviews when new commits are pushed
+        dismiss_stale_reviews: true
+
+        # Require review from CODEOWNERS
+        require_code_owner_reviews: true
+
+        # Require approval from most recent push
+        require_last_push_approval: false
+
+        # Restrict who can dismiss reviews (null = anyone with write access)
+        dismissal_restrictions: null
+
+      # Require status checks before merging
+      required_status_checks:
+        # Require branches to be up to date
+        strict: false
+
+        # Required status check contexts
+        checks:
+          - context: "PR Validation"
+            app_id: null
+
+      # Enforce rules for admins
+      enforce_admins: false
+
+      # Restrict who can push
+      restrictions: null
+
+      # Require linear history (no merge commits)
+      required_linear_history: false
+
+      # Allow force pushes
+      allow_force_pushes: false
+
+      # Allow deletions
+      allow_deletions: false
+
+      # Block direct pushes that create new files
+      block_creations: false
+
+      # Require conversation resolution before merging
+      required_conversation_resolution: false
+
+      # Lock branch (read-only)
+      lock_branch: false
+
+      # Allow fork syncing
+      allow_fork_syncing: false
+
+# JSON payload for API call
+# Save as branch-protection.json and run:
+# gh api repos/teenne/sysadmin/branches/main/protection -X PUT --input branch-protection.json
+#
+# {
+#   "required_status_checks": null,
+#   "enforce_admins": false,
+#   "required_pull_request_reviews": {
+#     "required_approving_review_count": 1,
+#     "dismiss_stale_reviews": true,
+#     "require_code_owner_reviews": true
+#   },
+#   "restrictions": null,
+#   "required_linear_history": false,
+#   "allow_force_pushes": false,
+#   "allow_deletions": false
+# }

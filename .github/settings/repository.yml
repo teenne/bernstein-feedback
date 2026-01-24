@@ -1,0 +1,51 @@
+# Repository Settings Configuration
+# This file documents the standard repository settings
+# Apply via GitHub UI: Settings > General
+#
+# Note: This is a reference document. GitHub does not natively read this file.
+# Use GitHub App "Settings" (probot/settings) to auto-apply, or configure manually.
+
+repository:
+  name: sysadmin
+  description: "DevLab Network Administration Toolkit - cross-platform lab management"
+
+  # Visibility
+  private: true
+
+  # Features
+  has_issues: true
+  has_projects: true
+  has_wiki: false
+  has_discussions: false
+  has_downloads: true
+
+  # Merge settings
+  allow_squash_merge: true
+  allow_merge_commit: true
+  allow_rebase_merge: true
+  allow_auto_merge: false
+  delete_branch_on_merge: true
+
+  # Squash merge settings
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
+
+  # Merge commit settings
+  merge_commit_title: PR_TITLE
+  merge_commit_message: PR_BODY
+
+  # Default branch
+  default_branch: main
+
+  # Security
+  vulnerability_alerts: true
+  automated_security_fixes: true
+
+# Topics/Tags
+topics:
+  - devops
+  - sysadmin
+  - ansible
+  - automation
+  - infrastructure
+  - homelab

@@ -1,0 +1,140 @@
+# Configuration Template for New Repositories
+#
+# Copy this file to start configuring a new repository for the
+# GitHub delivery system. Replace all placeholder values.
+#
+# Usage:
+# 1. Copy to your repo as prompt-2b-config.yml (or similar)
+# 2. Replace all <PLACEHOLDER> values
+# 3. Remove or add areas matching your folder structure
+# 4. Configure CODEOWNERS for your team
+# 5. Run prompt-2c-implementation.md with this config
+
+repository:
+  # Replace with your org/username and repo name
+  owner: <YOUR_ORG_OR_USERNAME>
+  name: <YOUR_REPO_NAME>
+  default_branch: main
+
+  # Check if your org has Issue Types beta enabled
+  has_issue_types: false
+
+  # Projects v2 should be available for most repos
+  has_projects_v2: true
+
+# Areas represent logical code sections
+# Customize to match your repository structure
+areas:
+  # Example: Frontend area
+  - name: Frontend
+    description: Frontend application code
+    color: blue
+    paths:
+      - apps/web/
+      - packages/ui/
+
+  # Example: Backend area
+  - name: Backend
+    description: Backend services and APIs
+    color: green
+    paths:
+      - services/
+      - packages/api/
+
+  # Example: Infrastructure area
+  - name: Infrastructure
+    description: Infrastructure and deployment
+    color: orange
+    paths:
+      - infra/
+      - terraform/
+      - k8s/
+
+  # Example: Documentation area
+  - name: Docs
+    description: Documentation
+    color: gray
+    paths:
+      - docs/
+      - "*.md"
+
+  # Add more areas as needed for your repo structure
+  # - name: <AREA_NAME>
+  #   description: <DESCRIPTION>
+  #   color: <COLOR>
+  #   paths:
+  #     - <PATH_PATTERN>/
+
+# CODEOWNERS configuration
+# Maps paths to required reviewers
+codeowners:
+  # Critical paths requiring senior review
+  - path: "contracts/"
+    owners:
+      - "@<YOUR_ORG>/architects"
+    comment: "Contract changes require architect review"
+
+  - path: "infra/"
+    owners:
+      - "@<YOUR_ORG>/platform"
+    comment: "Infrastructure changes require platform review"
+
+  # Default catch-all
+  - path: "*"
+    owners:
+      - "@<YOUR_ORG>/maintainers"
+    comment: "Default reviewers"
+
+# Branch protection settings
+branch_protection:
+  protected_branches:
+    - name: main
+      require_pull_request: true
+      required_approvals: 1
+      require_status_checks: true
+      required_checks:
+        - build
+        - test
+        - lint
+      dismiss_stale_reviews: true
+      require_codeowners_review: true
+
+# Jobs to be done (JTBD) options for epics
+# Customize based on your product's user needs
+jtbd:
+  - "<JTBD 1: What job does your user need done?>"
+  - "<JTBD 2: What problem are you solving?>"
+  - "<JTBD 3: What outcome does your user want?>"
+  # Add more JTBDs specific to your product
+
+# Project naming
+projects:
+  portfolio:
+    name: "Portfolio - Epics"
+    description: "Strategic outcomes, prioritization, and roadmap tracking"
+
+  delivery_platform:
+    name: "Delivery - Platform"
+    description: "Platform and infrastructure work"
+
+  delivery_apps:
+    name: "Delivery - Apps"
+    description: "Application development work"
+
+# Custom labels specific to this repo (beyond standard labels)
+custom_labels:
+  # - name: "custom:example"
+  #   description: "Example custom label"
+  #   color: "123456"
+
+# Team configuration
+team:
+  # GitHub teams for CODEOWNERS and assignments
+  architects: "@<YOUR_ORG>/architects"
+  platform: "@<YOUR_ORG>/platform"
+  maintainers: "@<YOUR_ORG>/maintainers"
+
+  # Individual maintainers (if not using teams)
+  # maintainers:
+  #   - "@username1"
+  #   - "@username2"

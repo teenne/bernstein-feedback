@@ -1,0 +1,219 @@
+# Labels Configuration
+# Standard labels for issue and PR categorization
+#
+# Apply via GitHub CLI:
+# gh label create "name" --description "desc" --color "hex" --force
+#
+# Or use GitHub App "Settings" (probot/settings) to auto-apply
+
+labels:
+  # Type Labels (Issue classification)
+  - name: "type:epic"
+    description: "Epic - large outcome-focused initiative"
+    color: "8b5cf6"
+
+  - name: "type:feature"
+    description: "Feature - deliverable capability"
+    color: "6366f1"
+
+  - name: "type:story"
+    description: "Story - user-focused work"
+    color: "3b82f6"
+
+  - name: "type:task"
+    description: "Task - technical work"
+    color: "06b6d4"
+
+  - name: "type:spike"
+    description: "Spike - time-boxed research"
+    color: "f59e0b"
+
+  # Kind Labels (Work characteristics)
+  - name: "kind:security"
+    description: "Security-related work"
+    color: "d93f0b"
+
+  - name: "kind:performance"
+    description: "Performance-related work"
+    color: "f9d0c4"
+
+  - name: "kind:refactor"
+    description: "Code refactoring"
+    color: "c2e0c6"
+
+  - name: "kind:docs"
+    description: "Documentation work"
+    color: "0075ca"
+
+  - name: "kind:testing"
+    description: "Testing work"
+    color: "bfd4f2"
+
+  # Area Labels (Code areas)
+  - name: "area:automation"
+    description: "Ansible and automation"
+    color: "1d4ed8"
+
+  - name: "area:scripts"
+    description: "Scripts (all platforms)"
+    color: "2563eb"
+
+  - name: "area:docs"
+    description: "Documentation"
+    color: "3b82f6"
+
+  - name: "area:security"
+    description: "Security tools and hardening"
+    color: "dc2626"
+
+  - name: "area:backup"
+    description: "Backup and restore"
+    color: "059669"
+
+  - name: "area:monitoring"
+    description: "Monitoring and observability"
+    color: "7c3aed"
+
+  - name: "area:inventory"
+    description: "Inventory and configuration"
+    color: "0891b2"
+
+  - name: "area:infra"
+    description: "Infrastructure and requirements"
+    color: "64748b"
+
+  # Priority Labels
+  - name: "priority:p0"
+    description: "Critical - drop everything"
+    color: "b91c1c"
+
+  - name: "priority:p1"
+    description: "High - current sprint"
+    color: "dc2626"
+
+  - name: "priority:p2"
+    description: "Medium - next sprint"
+    color: "f59e0b"
+
+  - name: "priority:p3"
+    description: "Low - backlog"
+    color: "6b7280"
+
+  # Stage Labels (Project lifecycle)
+  - name: "stage:discovery"
+    description: "Discovery - gathering requirements"
+    color: "a855f7"
+
+  - name: "stage:planning"
+    description: "Planning - designing solution"
+    color: "8b5cf6"
+
+  - name: "stage:development"
+    description: "Development - implementing"
+    color: "3b82f6"
+
+  - name: "stage:testing"
+    description: "Testing - validation phase"
+    color: "06b6d4"
+
+  - name: "stage:deployment"
+    description: "Deployment - rolling out"
+    color: "10b981"
+
+  - name: "stage:completed"
+    description: "Completed - done and validated"
+    color: "22c55e"
+
+  # Business Lifecycle Labels (Journey from idea to exit)
+  - name: "lifecycle:idea"
+    description: "Idea - initial concept exploration"
+    color: "fef3c7"
+
+  - name: "lifecycle:validation"
+    description: "Validation - testing assumptions and market fit"
+    color: "fde68a"
+
+  - name: "lifecycle:foundation"
+    description: "Foundation - core architecture and infrastructure"
+    color: "a855f7"
+
+  - name: "lifecycle:mvp"
+    description: "MVP - minimum viable product development"
+    color: "8b5cf6"
+
+  - name: "lifecycle:launch"
+    description: "Launch - initial release and go-to-market"
+    color: "3b82f6"
+
+  - name: "lifecycle:growth"
+    description: "Growth - user acquisition and feature expansion"
+    color: "06b6d4"
+
+  - name: "lifecycle:scaling"
+    description: "Scaling - infrastructure and team scaling"
+    color: "10b981"
+
+  - name: "lifecycle:maturity"
+    description: "Maturity - stable operations and optimization"
+    color: "22c55e"
+
+  - name: "lifecycle:maintenance"
+    description: "Maintenance - sustaining operations"
+    color: "64748b"
+
+  - name: "lifecycle:sunset"
+    description: "Sunset - planned deprecation"
+    color: "9ca3af"
+
+  - name: "lifecycle:exit"
+    description: "Exit - completion, sale, or transition"
+    color: "6b7280"
+
+  # Status Labels (Additional workflow states)
+  - name: "status:blocked"
+    description: "Blocked by dependency"
+    color: "ef4444"
+
+  - name: "status:needs-review"
+    description: "Needs review or input"
+    color: "f59e0b"
+
+  - name: "status:approved"
+    description: "Approved for implementation"
+    color: "22c55e"
+
+  # Keep standard GitHub labels
+  - name: "bug"
+    description: "Something isn't working"
+    color: "d73a4a"
+
+  - name: "duplicate"
+    description: "This issue or pull request already exists"
+    color: "cfd3d7"
+
+  - name: "good first issue"
+    description: "Good for newcomers"
+    color: "7057ff"
+
+  - name: "help wanted"
+    description: "Extra attention is needed"
+    color: "008672"
+
+  - name: "wontfix"
+    description: "This will not be worked on"
+    color: "ffffff"
+
+  - name: "stale"
+    description: "Inactive issue/PR"
+    color: "9ca3af"
+
+# Script to create all labels
+# Save and run: bash create-labels.sh
+#
+# #!/bin/bash
+# while IFS= read -r line; do
+#   name=$(echo "$line" | yq '.name')
+#   desc=$(echo "$line" | yq '.description')
+#   color=$(echo "$line" | yq '.color')
+#   gh label create "$name" --description "$desc" --color "$color" --force
+# done < <(yq '.labels[]' labels.yml -o=json -I=0)

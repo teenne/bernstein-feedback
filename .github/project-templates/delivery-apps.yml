@@ -1,0 +1,27 @@
+# Project Configuration: Delivery - Apps
+# Purpose: Track implementation work for applications and tools
+# Contains: Features, Stories, Tasks, Bugs, Spikes (no Epics)
+
+project:
+  name: "Delivery - Apps"
+  description: "Implementation tracking for applications and tooling"
+  visibility: private
+
+  linked_repositories:
+    - teenne/sysadmin
+
+  areas:
+    - Docs
+    - Scripts
+    - Automation
+
+# Uses same custom_fields as Delivery - Platform
+# See delivery-platform.yml for field definitions
+
+custom_fields:
+  # Inherits all fields from delivery-platform.yml
+  _inherit: delivery-platform.yml
+
+views:
+  # Inherits all views from delivery-platform.yml
+  _inherit: delivery-platform.yml

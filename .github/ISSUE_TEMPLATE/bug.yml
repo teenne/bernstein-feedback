@@ -1,0 +1,134 @@
+name: Bug
+description: Report a defect or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report bugs with clear reproduction steps. The more detail, the faster the fix.
+
+  - type: input
+    id: title
+    attributes:
+      label: Bug Title
+      description: Brief description of the bug
+      placeholder: "Connectivity check fails on Windows with non-ASCII hostname"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Exact steps to reproduce the bug
+      placeholder: |
+        1. Set hostname to "tëst-pc"
+        2. Run `python connectivity-check.py`
+        3. Observe error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen?
+      placeholder: |
+        Script should handle non-ASCII hostnames and complete successfully.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual Behavior
+      description: What actually happens?
+      placeholder: |
+        Script crashes with UnicodeDecodeError on line 45.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope_impact
+    attributes:
+      label: Scope and Impact
+      description: How severe is this? Who/what is affected?
+      placeholder: |
+        - Affects: Windows users with non-ASCII characters
+        - Severity: Medium - workaround exists (rename hostname)
+        - Frequency: Rare
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which area does this bug affect?
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, versions, relevant configuration
+      placeholder: |
+        - OS: Windows 11 23H2
+        - Python: 3.12.0
+        - Script version: main branch @ abc1234
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested_fix
+    attributes:
+      label: Suggested Fix or Hypothesis
+      description: Optional - any ideas on the cause or fix?
+      placeholder: |
+        Likely needs encoding handling in the hostname lookup function.
+    validations:
+      required: false
+
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: Allowed Paths for Fix
+      description: Which files should the fix modify?
+      placeholder: |
+        - scripts/cross-platform/connectivity-check.py
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      description: Risk of the fix
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true

@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "frontend-developer@awesome-claude-code-plugins": true
+  }
+}

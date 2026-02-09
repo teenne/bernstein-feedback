@@ -126,9 +126,9 @@ These adapters are planned for future releases based on portfolio analysis:
 
 | Adapter | Purpose | Status |
 |---------|---------|--------|
-| `webhookAdapter` | Send to Slack, Discord, Teams | Planned |
-| `supabaseAdapter` | Direct Supabase table insert | Planned |
-| `bernsteinBackendAdapter` | Native bernstein-backend integration | Planned |
+| `webhookAdapter` | Send to Slack, Discord, Teams | ✅ Available |
+| `supabaseAdapter` | Direct Supabase table insert | ✅ Available |
+| `bernsteinBackendAdapter` | Native bernstein-backend integration | ✅ Available |
 
 ### Tier 2 - Medium Value
 

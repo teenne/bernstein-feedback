@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: feedback_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      # Secure binding: Only allow connections from localhost
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # Deep check: verify connection AND query execution
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -c 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s # Allow time for WAL initialization
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Prevent host OOM
+          cpus: '0.5'
+    restart: always
+
+volumes:
+  postgres_data:

@@ -1,24 +1,32 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { FeedbackProvider, FeedbackButton, FeedbackDialog, FeedbackToast } from '../src'
-import { consoleAdapter, localStorageAdapter } from '../src/adapters'
+import { consoleAdapter, localStorageAdapter, webhookAdapter } from '../src/adapters'
 import { supabaseAdapter, isSupabaseConfigured } from './supabase-adapter'
 import '../src/styles.css'
 import './styles.css'
 
-type AdapterType = 'console' | 'localStorage' | 'supabase'
+type AdapterType = 'console' | 'localStorage' | 'supabase' | 'webhook'
 
 function App() {
   const [adapter, setAdapter] = React.useState<AdapterType>(
     isSupabaseConfigured ? 'supabase' : 'console'
   )
+  const [isDarkMode, setIsDarkMode] = React.useState(false)
+
+  // Toggle dark mode on html element
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light')
+  }, [isDarkMode])
 
   const getAdapter = () => {
     switch (adapter) {
       case 'supabase':
         return supabaseAdapter()
       case 'localStorage':
-        return localStorageAdapter({ key: 'feedback-demo' })
+        return localStorageAdapter({ prefix: 'feedback-demo' })
+      case 'webhook':
+        return webhookAdapter({ webhookUrl: 'https://httpbin.org/post' })
       default:
         return consoleAdapter()
     }
@@ -46,6 +54,27 @@ function App() {
         <h1>Feedback Component Demo</h1>
 
         <section>
+          <h2>Theme</h2>
+          <div className="button-group">
+            <button
+              className={!isDarkMode ? 'active' : ''}
+              onClick={() => setIsDarkMode(false)}
+            >
+              Light Mode
+            </button>
+            <button
+              className={isDarkMode ? 'active' : ''}
+              onClick={() => setIsDarkMode(true)}
+            >
+              Dark Mode
+            </button>
+          </div>
+          <p className="hint">
+            Toggle dark mode to verify widget color inversion.
+          </p>
+        </section>
+
+        <section>
           <h2>Adapter Selection</h2>
           <div className="button-group">
             <button
@@ -68,11 +97,18 @@ function App() {
             >
               Supabase {!isSupabaseConfigured && '(not configured)'}
             </button>
+            <button
+              className={adapter === 'webhook' ? 'active' : ''}
+              onClick={() => setAdapter('webhook')}
+            >
+              Webhook
+            </button>
           </div>
           <p className="hint">
             {adapter === 'console' && 'Feedback will be logged to the browser console.'}
             {adapter === 'localStorage' && 'Feedback will be saved to localStorage (key: feedback-demo).'}
             {adapter === 'supabase' && 'Feedback will be saved to your Supabase database.'}
+            {adapter === 'webhook' && 'Feedback will be sent to a webhook URL (httpbin.org for demo).'}
           </p>
         </section>
 
@@ -83,7 +119,7 @@ function App() {
               Trigger Console Error
             </button>
             <button onClick={() => {
-              fetch('/api/nonexistent').catch(() => {})
+              fetch('/api/nonexistent').catch(() => { })
             }}>
               Trigger Network Error
             </button>
@@ -143,7 +179,7 @@ function App() {
               <li>Create a <code>.env</code> file in the <code>example/</code> folder</li>
               <li>Add your Supabase credentials:
                 <pre>
-{`VITE_SUPABASE_URL=https://your-project.supabase.co
+                  {`VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key`}
                 </pre>
               </li>

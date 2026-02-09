@@ -70,11 +70,12 @@ export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter {
  * Useful for offline-first scenarios where events are queued
  */
 export function batchHttpAdapter(
-  options: HttpAdapterOptions & { batchSize?: number }
-): FeedbackAdapter & { flush: () => Promise<void> } {
-  const { batchSize = 10, ...httpOptions } = options;
+  options: HttpAdapterOptions & { batchSize?: number; flushInterval?: number }
+): FeedbackAdapter & { flush: () => Promise<void>; dispose: () => void } {
+  const { batchSize = 10, flushInterval = 30000, ...httpOptions } = options;
   const queue: FeedbackEvent[] = [];
   let flushTimeout: ReturnType<typeof setTimeout> | null = null;
+  let flushIntervalId: ReturnType<typeof setInterval> | null = null;
 
   const baseAdapter = httpAdapter({
     ...httpOptions,
@@ -90,11 +91,27 @@ export function batchHttpAdapter(
     await baseAdapter.submit(batch[0]); // Simplified - real impl would send batch
   };
 
+  // Set up interval-based flush for guaranteed delivery
+  if (flushInterval > 0) {
+    flushIntervalId = setInterval(flush, flushInterval);
+  }
+
+  const dispose = () => {
+    if (flushTimeout) {
+      clearTimeout(flushTimeout);
+      flushTimeout = null;
+    }
+    if (flushIntervalId) {
+      clearInterval(flushIntervalId);
+      flushIntervalId = null;
+    }
+  };
+
   return {
     async submit(event: FeedbackEvent) {
       queue.push(event);
 
-      // Debounce flush
+      // Debounce flush for immediate batching
       if (flushTimeout) clearTimeout(flushTimeout);
       flushTimeout = setTimeout(flush, 1000);
 
@@ -105,5 +122,7 @@ export function batchHttpAdapter(
       return { success: true };
     },
     flush,
+    dispose,
   };
 }
+

@@ -3,6 +3,7 @@ export { FeedbackProvider, useFeedback } from './context';
 export { FeedbackDialog } from './components/FeedbackDialog';
 export { FeedbackButton, FeedbackIconButton } from './components/FeedbackButton';
 export { FeedbackToast } from './components/FeedbackToast';
+export { RouteObserver } from './components/RouteObserver';
 
 // Schema exports
 export {

@@ -47,6 +47,8 @@ interface FeedbackContextValue {
   captureContext: () => CapturedContext;
   /** Track a custom breadcrumb */
   addBreadcrumb: (breadcrumb: Omit<Breadcrumb, 'timestamp'>) => void;
+  /** Update screen identity for navigation tracking */
+  setScreen: (screen: { screenId?: string; pageName?: string }) => void;
   initialFormState: Partial<FeedbackFormState>;
 }
 
@@ -73,6 +75,12 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [initialFormState, setInitialFormState] = useState<Partial<FeedbackFormState>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Dynamic screen identity state
+  const [screenIdentity, setScreenIdentity] = useState<{ screenId?: string; pageName?: string }>({
+    screenId: config.screenId,
+    pageName: config.pageName,
+  });
 
   // Captured context storage
   const consoleErrors = useRef<ConsoleError[]>([]);
@@ -215,9 +223,9 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
-    
+
     setToast(newToast);
-    
+
     const duration = config.toastDuration ?? 5000;
     if (duration > 0) {
       toastTimeoutRef.current = setTimeout(() => {
@@ -233,9 +241,9 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       url: redactUrl(window.location.href, config.redact),
       route: window.location.pathname,
 
-      // Screen identity
-      screenId: config.screenId,
-      pageName: config.pageName,
+      // Screen identity (dynamic from setScreen or config fallback)
+      screenId: screenIdentity.screenId ?? config.screenId,
+      pageName: screenIdentity.pageName ?? config.pageName,
 
       // Build identity
       appVersion: config.appVersion,
@@ -258,7 +266,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       networkErrors: networkErrors.current.slice(-maxNetworkErrors),
       breadcrumbs: breadcrumbs.current.slice(-maxBreadcrumbs),
     };
-  }, [config.appVersion, config.buildSha, config.componentVersion, config.env, config.pageName, config.screenId, config.redact, maxConsoleErrors, maxNetworkErrors, maxBreadcrumbs]);
+  }, [config.appVersion, config.buildSha, config.componentVersion, config.env, config.pageName, config.screenId, config.redact, screenIdentity, maxConsoleErrors, maxNetworkErrors, maxBreadcrumbs]);
 
   const openFeedback = useCallback((initialState?: Partial<FeedbackFormState>) => {
     setInitialFormState({ type: 'feedback', ...initialState });
@@ -372,6 +380,10 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     [config, captureContext, close, showToast]
   );
 
+  const setScreen = useCallback((screen: { screenId?: string; pageName?: string }) => {
+    setScreenIdentity(prev => ({ ...prev, ...screen }));
+  }, []);
+
   const value: FeedbackContextValue = {
     config: config as FeedbackConfig,
     isOpen,
@@ -387,6 +399,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     submit,
     captureContext,
     addBreadcrumb,
+    setScreen,
     initialFormState,
   };
 

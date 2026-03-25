@@ -1,0 +1,96 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for linked issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+
+            // Check for issue references
+            const issuePatterns = [
+              /[Cc]loses?\s+#(\d+)/g,
+              /[Ff]ixes?\s+#(\d+)/g,
+              /[Rr]esolves?\s+#(\d+)/g,
+              /[Rr]elates?\s+to\s+#(\d+)/g
+            ];
+
+            let hasIssueRef = false;
+            for (const pattern of issuePatterns) {
+              if (pattern.test(body)) {
+                hasIssueRef = true;
+                break;
+              }
+            }
+
+            if (!hasIssueRef) {
+              core.warning('No linked issue found. PRs should reference an issue using "Closes #X" or "Relates to #X".');
+
+              // Add a comment if not already present
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number
+              });
+
+              const botComment = comments.data.find(c =>
+                c.user.type === 'Bot' &&
+                c.body.includes('Missing Issue Reference')
+              );
+
+              if (!botComment) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `## Missing Issue Reference
+
+            This PR does not appear to reference an issue. Per our [contributing guidelines](../blob/main/CONTRIBUTING.md), all PRs should be linked to an issue.
+
+            Please update the PR description to include one of:
+            - \`Closes #123\` - if this PR fully resolves the issue
+            - \`Relates to #123\` - if this PR is related but doesn't close the issue
+
+            If no issue exists, please [create one first](../issues/new/choose).`
+                });
+              }
+            } else {
+              console.log('Issue reference found in PR body');
+            }
+
+      - name: Check PR title format
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title;
+
+            // Check title is not empty or generic
+            const badTitles = [
+              /^update$/i,
+              /^fix$/i,
+              /^changes$/i,
+              /^wip$/i,
+              /^test$/i
+            ];
+
+            for (const pattern of badTitles) {
+              if (pattern.test(title.trim())) {
+                core.setFailed(`PR title "${title}" is too generic. Please use a descriptive title.`);
+                return;
+              }
+            }
+
+            console.log('PR title is acceptable');

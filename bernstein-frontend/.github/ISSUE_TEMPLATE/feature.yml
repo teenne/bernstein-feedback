@@ -1,0 +1,178 @@
+name: Feature
+description: A deliverable capability that contributes to an epic
+labels: ["type:feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Features are deliverable capabilities. They belong to an Epic and contain Stories/Tasks.
+
+  - type: input
+    id: title
+    attributes:
+      label: Feature Title
+      description: Clear capability-focused title
+      placeholder: "Ansible role for Docker host configuration"
+    validations:
+      required: true
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent Epic
+      description: Link to parent epic (issue number)
+      placeholder: "#123"
+    validations:
+      required: true
+
+  - type: textarea
+    id: business_value
+    attributes:
+      label: Business Value
+      description: Why does this feature matter? What does it enable?
+      placeholder: |
+        Describe what this feature delivers and why it matters.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: business_points
+    attributes:
+      label: Business Points
+      description: Relative business value (1-10)
+      options:
+        - "1"
+        - "2"
+        - "3"
+        - "4"
+        - "5"
+        - "6"
+        - "7"
+        - "8"
+        - "9"
+        - "10"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: value_type
+    attributes:
+      label: Value Type
+      description: Primary classification of this feature
+      options:
+        - Business feature
+        - Architecture
+        - Platform capability
+        - Technical debt
+        - Security
+        - Compliance / regulatory
+        - Reliability / resilience
+        - Performance / scalability
+        - Developer experience
+        - Research / spike
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lifecycle_stage
+    attributes:
+      label: Lifecycle Stage
+      description: Current business lifecycle stage
+      options:
+        - Idea
+        - Validation
+        - Foundation
+        - MVP
+        - Launch
+        - Growth
+        - Scaling
+        - Maturity
+        - Maintenance
+        - Sunset
+        - Exit
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Primary area this feature affects
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: success_criteria
+    attributes:
+      label: Success Criteria
+      description: How do we know this feature is complete?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: What is explicitly out of scope?
+      placeholder: |
+        - Not doing X
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks_dependencies
+    attributes:
+      label: Risks and Dependencies
+      description: What could block this feature?
+      placeholder: |
+        Risks:
+        - Risk 1
+
+        Dependencies:
+        - Depends on X
+    validations:
+      required: true
+
+  - type: input
+    id: target_release
+    attributes:
+      label: Target Release
+      description: Target release or milestone
+      placeholder: "v1.0.0 or Phase 3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true

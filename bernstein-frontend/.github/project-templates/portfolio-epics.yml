@@ -1,0 +1,371 @@
+# Project Configuration: Portfolio - Epics
+# Purpose: Outcomes, prioritisation, roadmap tracking
+# Contains: Epics only
+#
+# To create this project:
+# 1. Go to https://github.com/users/teenne/projects
+# 2. Click "New project" > Start from scratch > Board
+# 3. Name it "Portfolio - Epics"
+# 4. Add custom fields as defined below
+# 5. Create views as defined below
+# 6. Link repository: Settings > Linked repositories > Add teenne/sysadmin
+
+project:
+  name: "Portfolio - Epics"
+  description: "Strategic outcomes, prioritisation, and roadmap tracking for epics"
+  visibility: private
+
+  linked_repositories:
+    - teenne/sysadmin
+
+custom_fields:
+  # Core Flow Fields
+  - name: Status
+    type: single_select
+    options:
+      - name: Backlog
+        color: gray
+        description: Not yet planned
+      - name: Ready
+        color: blue
+        description: Ready to start, dependencies met
+      - name: In progress
+        color: yellow
+        description: Actively being worked on
+      - name: Review
+        color: purple
+        description: Under review or validation
+      - name: Blocked
+        color: red
+        description: Blocked by dependency or issue
+      - name: Done
+        color: green
+        description: Completed and validated
+
+  - name: Area
+    type: single_select
+    options:
+      - name: Automation
+        color: blue
+        description: Ansible and automation tooling
+      - name: Scripts
+        color: cyan
+        description: PowerShell, Bash, Python scripts
+      - name: Docs
+        color: gray
+        description: Documentation
+      - name: Security
+        color: red
+        description: Security tools and hardening
+      - name: Backup
+        color: green
+        description: Backup and restore systems
+      - name: Monitoring
+        color: purple
+        description: Observability and alerting
+      - name: Inventory
+        color: orange
+        description: Machine inventory management
+      - name: Infra
+        color: pink
+        description: Infrastructure and requirements
+
+  - name: Priority
+    type: single_select
+    options:
+      - name: P0
+        color: red
+        description: Critical - drop everything
+      - name: P1
+        color: orange
+        description: High - current sprint
+      - name: P2
+        color: yellow
+        description: Medium - next sprint
+      - name: P3
+        color: gray
+        description: Low - backlog
+
+  - name: Risk
+    type: single_select
+    options:
+      - name: Low
+        color: green
+        description: Minimal risk, well understood
+      - name: Medium
+        color: yellow
+        description: Some uncertainty or dependencies
+      - name: High
+        color: red
+        description: Significant unknowns or blockers
+
+  - name: Sprint
+    type: text
+    description: "Sprint identifier (e.g., Sprint 2026-03)"
+
+  - name: Release
+    type: text
+    description: "Target release version or milestone"
+
+  # Business Lifecycle Stage
+  - name: Lifecycle Stage
+    type: single_select
+    description: "Business journey stage from idea to exit"
+    options:
+      - name: Idea
+        color: yellow
+        description: Initial concept exploration
+      - name: Validation
+        color: orange
+        description: Testing assumptions and market fit
+      - name: Foundation
+        color: purple
+        description: Core architecture and infrastructure
+      - name: MVP
+        color: violet
+        description: Minimum viable product development
+      - name: Launch
+        color: blue
+        description: Initial release and go-to-market
+      - name: Growth
+        color: cyan
+        description: User acquisition and feature expansion
+      - name: Scaling
+        color: teal
+        description: Infrastructure and team scaling
+      - name: Maturity
+        color: green
+        description: Stable operations and optimization
+      - name: Maintenance
+        color: gray
+        description: Sustaining operations
+      - name: Sunset
+        color: silver
+        description: Planned deprecation
+      - name: Exit
+        color: slate
+        description: Completion, sale, or transition
+
+  # Jobs to be Done (Epic-specific)
+  - name: JTBD
+    type: single_select
+    description: "What customer job does this epic serve?"
+    required_for:
+      - type:epic
+    options:
+      - name: Manage lab infrastructure efficiently
+        color: blue
+        description: Efficient infrastructure management
+      - name: Automate repetitive administrative tasks
+        color: green
+        description: Administrative automation
+      - name: Ensure systems are secure and compliant
+        color: red
+        description: Security and compliance
+      - name: Monitor and maintain system health
+        color: purple
+        description: System monitoring and health
+      - name: Migrate workloads between platforms
+        color: orange
+        description: Workload migration
+      - name: Backup and recover critical data
+        color: cyan
+        description: Data backup and recovery
+      - name: Provision new machines quickly
+        color: yellow
+        description: Quick machine provisioning
+      - name: Document and share knowledge
+        color: gray
+        description: Knowledge documentation
+
+  # Value Fields (Epic-specific)
+  - name: Business value
+    type: text
+    description: "Description of business/user value delivered"
+    required_for:
+      - type:epic
+
+  - name: Business points
+    type: number
+    description: "Relative business value 1-10"
+    min: 1
+    max: 10
+    required_for:
+      - type:epic
+
+  - name: Value type
+    type: single_select
+    required_for:
+      - type:epic
+    options:
+      - name: Business feature
+        color: blue
+        description: User-facing functionality
+      - name: Architecture
+        color: purple
+        description: Architectural improvement
+      - name: Platform capability
+        color: cyan
+        description: Platform/infrastructure capability
+      - name: Technical debt
+        color: orange
+        description: Technical debt reduction
+      - name: Security
+        color: red
+        description: Security enhancement
+      - name: Compliance / regulatory
+        color: pink
+        description: Compliance or regulatory requirement
+      - name: Reliability / resilience
+        color: green
+        description: Reliability improvement
+      - name: Performance / scalability
+        color: yellow
+        description: Performance or scalability
+      - name: Developer experience
+        color: gray
+        description: Developer experience improvement
+      - name: Research / spike
+        color: white
+        description: Research or investigation
+
+  # Agent Control
+  - name: Agent
+    type: single_select
+    description: "Assigned AI agent or human"
+    options:
+      - name: Human
+        color: blue
+      - name: Codex
+        color: green
+      - name: Claude-impl-1
+        color: purple
+      - name: Claude-impl-2
+        color: purple
+      - name: Claude-impl-3
+        color: purple
+      - name: Claude-review
+        color: orange
+      - name: Claude-qa
+        color: cyan
+      - name: Claude-docs
+        color: gray
+
+views:
+  - name: Roadmap
+    type: board
+    description: "Epics grouped by release for roadmap planning"
+    filter:
+      labels:
+        - type:epic
+    group_by: Release
+    sort:
+      field: Business points
+      direction: desc
+
+  - name: Epic Priority Table
+    type: table
+    description: "All epics sorted by business value"
+    filter:
+      labels:
+        - type:epic
+    columns:
+      - Title
+      - Area
+      - Value type
+      - Business points
+      - Status
+      - Risk
+      - Release
+    sort:
+      field: Business points
+      direction: desc
+
+  - name: Architecture and Platform
+    type: table
+    description: "Technical initiatives requiring architecture review"
+    filter:
+      labels:
+        - type:epic
+      value_type:
+        - Architecture
+        - Platform capability
+        - Security
+        - Compliance / regulatory
+    sort:
+      field: Business points
+      direction: desc
+
+  - name: Quality Control
+    type: table
+    description: "Epics missing required fields"
+    filter:
+      labels:
+        - type:epic
+      or:
+        - field: Business value
+          is_empty: true
+        - field: Business points
+          is_empty: true
+        - field: Value type
+          is_empty: true
+    columns:
+      - Title
+      - Business value
+      - Business points
+      - Value type
+      - Status
+
+  - name: Business Lifecycle
+    type: board
+    description: "Epics grouped by business lifecycle stage"
+    filter:
+      labels:
+        - type:epic
+    group_by: Lifecycle Stage
+    columns:
+      - Idea
+      - Validation
+      - Foundation
+      - MVP
+      - Launch
+      - Growth
+      - Scaling
+      - Maturity
+      - Maintenance
+      - Sunset
+      - Exit
+    sort:
+      field: Business points
+      direction: desc
+
+  - name: Active Initiatives
+    type: table
+    description: "Epics in active business stages (Foundation through Scaling)"
+    filter:
+      labels:
+        - type:epic
+      lifecycle_stage:
+        - Foundation
+        - MVP
+        - Launch
+        - Growth
+        - Scaling
+    columns:
+      - Title
+      - Lifecycle Stage
+      - Area
+      - Business points
+      - Status
+      - Risk
+    sort:
+      field: Lifecycle Stage
+      direction: asc
+
+workflows:
+  - name: Auto-set status on add
+    trigger: item_added
+    action:
+      set_field:
+        field: Status
+        value: Backlog

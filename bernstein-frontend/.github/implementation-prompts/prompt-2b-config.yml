@@ -1,0 +1,158 @@
+# Prompt 2b: Repository Configuration
+#
+# This file contains customizable values for each repository.
+# Copy this file and modify for your specific repo before running prompt-2c.
+#
+# Usage:
+# 1. Copy this file to your repo
+# 2. Fill in repository details
+# 3. Define areas matching your folder structure
+# 4. Define CODEOWNERS mappings
+# 5. Run prompt-2c with this config
+
+repository:
+  owner: teenne
+  name: sysadmin
+  default_branch: main
+
+  # Set to true if GitHub Issue Types feature is available
+  # (currently in beta for some orgs)
+  has_issue_types: false
+
+  # Set to true if you can create Projects v2
+  has_projects_v2: true
+
+# Areas represent logical code sections
+# Map to folder paths in your repository
+areas:
+  - name: Automation
+    description: Ansible and automation tooling
+    color: blue
+    paths:
+      - ansible/
+      - requirements/ansible-requirements.yml
+
+  - name: Scripts
+    description: PowerShell, Bash, Python scripts
+    color: cyan
+    paths:
+      - scripts/windows/
+      - scripts/linux/
+      - scripts/cross-platform/
+
+  - name: Docs
+    description: Documentation
+    color: gray
+    paths:
+      - docs/
+      - "*.md"
+
+  - name: Security
+    description: Security tools and hardening
+    color: red
+    paths:
+      - security/
+      - docs/security.md
+
+  - name: Backup
+    description: Backup and restore systems
+    color: green
+    paths:
+      - backup/
+      - docs/backup-restore.md
+
+  - name: Monitoring
+    description: Observability and alerting
+    color: purple
+    paths:
+      - monitoring/
+
+  - name: Inventory
+    description: Machine inventory management
+    color: orange
+    paths:
+      - inventory/
+
+  - name: Infra
+    description: Infrastructure and requirements
+    color: pink
+    paths:
+      - requirements/
+      - references/
+
+# CODEOWNERS configuration
+# Maps paths to required reviewers
+codeowners:
+  # Protected/critical paths requiring review
+  - path: "inventory/*.yaml"
+    owners:
+      - "@teenne"
+    comment: "Inventory files require owner review"
+
+  - path: "security/"
+    owners:
+      - "@teenne"
+    comment: "Security changes require owner review"
+
+  - path: "ansible/roles/"
+    owners:
+      - "@teenne"
+    comment: "Ansible roles require owner review"
+
+  # Documentation paths
+  - path: "docs/"
+    owners:
+      - "@teenne"
+    comment: "Documentation changes"
+
+  # Default for everything else
+  - path: "*"
+    owners:
+      - "@teenne"
+    comment: "Default owner"
+
+# Branch protection settings
+# Note: Some settings require GitHub Pro/Enterprise
+branch_protection:
+  protected_branches:
+    - name: main
+      require_pull_request: true
+      required_approvals: 1
+      require_status_checks: false  # Set to true when CI is configured
+      required_checks: []  # Add check names when CI exists
+      dismiss_stale_reviews: true
+      require_codeowners_review: true
+
+# Jobs to be done (JTBD) options for epics
+# Customize based on your product's user needs
+jtbd:
+  - "Manage lab infrastructure efficiently"
+  - "Automate repetitive administrative tasks"
+  - "Ensure systems are secure and compliant"
+  - "Monitor and maintain system health"
+  - "Migrate workloads between platforms"
+  - "Backup and recover critical data"
+  - "Provision new machines quickly"
+  - "Document and share knowledge"
+
+# Project naming
+# Customize if you want different project names
+projects:
+  portfolio:
+    name: "Portfolio - Epics"
+    description: "Strategic outcomes, prioritization, and roadmap tracking"
+
+  delivery_platform:
+    name: "Delivery - Platform"
+    description: "Infrastructure and automation work"
+
+  delivery_apps:
+    name: "Delivery - Apps"
+    description: "Scripts and tooling work"
+
+# Labels to create (in addition to standard labels)
+# Add repo-specific labels here
+custom_labels: []
+  # - name: "custom:example"
+  #   description: "Example custom label"
+  #   color: "123456"

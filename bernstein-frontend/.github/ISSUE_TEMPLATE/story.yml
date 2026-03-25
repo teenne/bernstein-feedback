@@ -1,0 +1,157 @@
+name: Story
+description: A user-focused unit of work that delivers value
+labels: ["type:story"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Stories are user-focused work items. They belong to a Feature and are implementable in one sprint.
+
+  - type: input
+    id: title
+    attributes:
+      label: Story Title
+      description: User story format preferred
+      placeholder: "As a developer, I can run connectivity checks via CLI"
+    validations:
+      required: true
+
+  - type: input
+    id: parent_feature
+    attributes:
+      label: Parent Feature
+      description: Link to parent feature (issue number)
+      placeholder: "#123"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Primary area this story affects
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: Allowed Paths
+      description: Which directories/files can be modified?
+      placeholder: |
+        - scripts/cross-platform/
+        - docs/
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts_touched
+    attributes:
+      label: Contracts Touched
+      description: Any interfaces, APIs, or shared contracts affected?
+      placeholder: |
+        - None
+        OR
+        - inventory/hosts.example.yaml schema
+    validations:
+      required: true
+
+  - type: textarea
+    id: interfaces_affected
+    attributes:
+      label: Interfaces Affected
+      description: CLI arguments, config formats, API changes?
+      placeholder: |
+        - New CLI flag --verbose
+        - Config file format change
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Specific, testable criteria for completion
+      placeholder: |
+        - [ ] Given X, when Y, then Z
+        - [ ] Script returns exit code 0 on success
+        - [ ] Documentation updated
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests_required
+    attributes:
+      label: Tests Required
+      description: What tests must pass?
+      placeholder: |
+        - [ ] Unit tests for new functions
+        - [ ] Integration test with mock hosts
+        - [ ] Manual verification on lab machine
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of Scope
+      description: What should NOT be done in this story?
+      placeholder: |
+        - Do not refactor existing code
+        - Do not change unrelated files
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk_notes
+    attributes:
+      label: Risk Notes
+      description: Any risks or concerns?
+      placeholder: |
+        - Low risk, isolated change
+    validations:
+      required: false
+
+  - type: textarea
+    id: how_to_verify
+    attributes:
+      label: How to Verify
+      description: Step-by-step verification instructions
+      placeholder: |
+        1. Run `python script.py --help`
+        2. Verify output shows new flag
+        3. Run with --verbose and confirm output
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true

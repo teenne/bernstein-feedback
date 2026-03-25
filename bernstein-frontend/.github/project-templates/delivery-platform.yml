@@ -1,0 +1,234 @@
+# Project Configuration: Delivery - Platform
+# Purpose: Track implementation work for platform/infrastructure
+# Contains: Features, Stories, Tasks, Bugs, Spikes (no Epics)
+#
+# To create this project:
+# 1. Go to https://github.com/users/teenne/projects
+# 2. Click "New project" > Start from scratch > Board
+# 3. Name it "Delivery - Platform"
+# 4. Add custom fields as defined below
+# 5. Create views as defined below
+# 6. Link repository: Settings > Linked repositories > Add teenne/sysadmin
+
+project:
+  name: "Delivery - Platform"
+  description: "Implementation tracking for platform and infrastructure work"
+  visibility: private
+
+  linked_repositories:
+    - teenne/sysadmin
+
+  areas:
+    - Automation
+    - Scripts
+    - Security
+    - Backup
+    - Monitoring
+    - Inventory
+    - Infra
+
+custom_fields:
+  # Core Flow Fields
+  - name: Status
+    type: single_select
+    options:
+      - name: Backlog
+        color: gray
+      - name: Ready
+        color: blue
+      - name: In progress
+        color: yellow
+      - name: Review
+        color: purple
+      - name: Blocked
+        color: red
+      - name: Done
+        color: green
+
+  - name: Area
+    type: single_select
+    options:
+      - name: Automation
+        color: blue
+      - name: Scripts
+        color: cyan
+      - name: Docs
+        color: gray
+      - name: Security
+        color: red
+      - name: Backup
+        color: green
+      - name: Monitoring
+        color: purple
+      - name: Inventory
+        color: orange
+      - name: Infra
+        color: pink
+
+  - name: Priority
+    type: single_select
+    options:
+      - name: P0
+        color: red
+      - name: P1
+        color: orange
+      - name: P2
+        color: yellow
+      - name: P3
+        color: gray
+
+  - name: Risk
+    type: single_select
+    options:
+      - name: Low
+        color: green
+      - name: Medium
+        color: yellow
+      - name: High
+        color: red
+
+  - name: Sprint
+    type: text
+    description: "Sprint identifier (e.g., Sprint 2026-03)"
+
+  - name: Release
+    type: text
+    description: "Target release version"
+
+  # Hierarchy Fields
+  - name: Epic
+    type: text
+    description: "Parent epic issue number (e.g., #123)"
+
+  - name: Feature
+    type: text
+    description: "Parent feature issue number (e.g., #456)"
+
+  # Agent Control
+  - name: Agent
+    type: single_select
+    options:
+      - name: Human
+        color: blue
+      - name: Codex
+        color: green
+      - name: Claude-impl-1
+        color: purple
+      - name: Claude-impl-2
+        color: purple
+      - name: Claude-impl-3
+        color: purple
+      - name: Claude-review
+        color: orange
+      - name: Claude-qa
+        color: cyan
+      - name: Claude-docs
+        color: gray
+
+  # Safety Fields
+  - name: Allowed paths
+    type: text
+    description: "Comma-separated list of allowed file paths"
+
+  - name: Contracts touched
+    type: text
+    description: "Interfaces, APIs, or schemas modified"
+
+views:
+  - name: Board by Status
+    type: board
+    description: "Kanban board grouped by status"
+    filter:
+      exclude_labels:
+        - type:epic
+    group_by: Status
+    columns:
+      - Backlog
+      - Ready
+      - In progress
+      - Review
+      - Blocked
+      - Done
+
+  - name: Execution by Epic
+    type: table
+    description: "Work items grouped by parent epic"
+    filter:
+      labels:
+        - type:story
+        - type:task
+        - bug
+    group_by: Epic
+    columns:
+      - Title
+      - Status
+      - Priority
+      - Agent
+      - Sprint
+
+  - name: Execution by Feature
+    type: table
+    description: "Stories grouped by parent feature"
+    filter:
+      labels:
+        - type:story
+    group_by: Feature
+    columns:
+      - Title
+      - Status
+      - Priority
+      - Agent
+
+  - name: Current Sprint
+    type: board
+    description: "Current sprint work"
+    filter:
+      sprint: current
+      labels:
+        - type:story
+        - type:task
+        - bug
+    group_by: Status
+
+  - name: Blocked Work
+    type: table
+    description: "All blocked items requiring attention"
+    filter:
+      status: Blocked
+    columns:
+      - Title
+      - Area
+      - Priority
+      - Agent
+      - Epic
+
+  - name: My Work
+    type: table
+    description: "Items assigned to current user"
+    filter:
+      assignee: "@me"
+    sort:
+      field: Priority
+      direction: asc
+
+workflows:
+  - name: Auto-set status on add
+    trigger: item_added
+    action:
+      set_field:
+        field: Status
+        value: Backlog
+
+  - name: Move to Review on PR
+    trigger: pull_request_opened
+    action:
+      set_field:
+        field: Status
+        value: Review
+
+  - name: Move to Done on merge
+    trigger: pull_request_merged
+    action:
+      set_field:
+        field: Status
+        value: Done

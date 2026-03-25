@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embedded Widget Test</title>
+</head>
+<body class="bg-gray-50 text-gray-900" style="font-family: system-ui, sans-serif; height: 100vh; margin: 0; padding: 2rem;">
+    <h1>External Website Demo</h1>
+    <p>This page represents an entirely different website.</p>
+    <p>We only injected one script tag at the bottom of the body. Notice how the feedback widget appears!</p>
+
+    <!-- This is the ONLY code required to add the feedback widget to ANY website -->
+    <script 
+        src="./dist/embed/widget.js" 
+        data-project-id="demo-app" 
+        data-adapter-id="supabase"
+        data-dark-mode
+    ></script>
+</body>
+</html>

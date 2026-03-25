@@ -1,0 +1,36 @@
+# Configuration for actions/labeler
+# Maps file paths to labels
+
+area:automation:
+  - changed-files:
+      - any-glob-to-any-file: 'ansible/**'
+
+area:scripts:
+  - changed-files:
+      - any-glob-to-any-file: 'scripts/**'
+
+area:docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '*.md'
+          - '!CONTRIBUTING.md'
+
+area:security:
+  - changed-files:
+      - any-glob-to-any-file: 'security/**'
+
+area:backup:
+  - changed-files:
+      - any-glob-to-any-file: 'backup/**'
+
+area:inventory:
+  - changed-files:
+      - any-glob-to-any-file: 'inventory/**'
+
+area:infra:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'requirements/**'
+          - '.github/**'
+          - '.env.example'

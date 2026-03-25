@@ -1,0 +1,38 @@
+# CODEOWNERS - Defines code ownership for review requirements
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Note: CODEOWNERS enforcement requires branch protection (GitHub Pro or public repo).
+# On free private repos, this file serves as documentation of ownership.
+# Manual review compliance is tracked via CONTRIBUTING.md operating rules.
+
+# Default owner for everything
+* @teenne
+
+# Automation (Ansible playbooks and roles)
+/ansible/ @teenne
+
+# Scripts by platform
+/scripts/windows/ @teenne
+/scripts/linux/ @teenne
+/scripts/cross-platform/ @teenne
+
+# Security-sensitive paths (require explicit review)
+/security/ @teenne
+
+# Backup configurations
+/backup/ @teenne
+
+# Infrastructure and requirements
+/requirements/ @teenne
+/inventory/ @teenne
+
+# Documentation
+/docs/ @teenne
+
+# GitHub configuration (templates, workflows)
+/.github/ @teenne
+
+# Root configuration files
+/CLAUDE.md @teenne
+/CONTRIBUTING.md @teenne
+/.env.example @teenne

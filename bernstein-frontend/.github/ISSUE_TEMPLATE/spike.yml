@@ -1,0 +1,103 @@
+name: Spike
+description: Time-boxed research or investigation
+labels: ["type:spike"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Spikes are time-boxed investigations. They answer questions, not deliver features.
+
+  - type: input
+    id: title
+    attributes:
+      label: Spike Title
+      description: Clear question-focused title
+      placeholder: "Investigate K3s vs MicroK8s for lab cluster"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question_to_answer
+    attributes:
+      label: Question to Answer
+      description: What specific question(s) must this spike answer?
+      placeholder: |
+        1. Which is easier to set up on Ubuntu 24.04?
+        2. Which has better Tailscale integration?
+        3. Which uses fewer resources?
+    validations:
+      required: true
+
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      description: Maximum time to spend on this spike
+      placeholder: "4 hours"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_outputs
+    attributes:
+      label: Expected Outputs
+      description: What will be delivered at the end?
+      placeholder: |
+        - [ ] Decision document in docs/decisions/
+        - [ ] Comparison table
+        - [ ] Recommendation with rationale
+        - [ ] Prototype scripts (if applicable)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Primary area this spike relates to
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this spike needed? What decision does it inform?
+      placeholder: |
+        We need to choose a Kubernetes distribution for the lab.
+        This spike informs the Epic "Deploy K8s cluster".
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Any constraints on the investigation?
+      placeholder: |
+        - Must work on Ubuntu 24.04
+        - Must support ARM64 (for Raspberry Pi)
+        - Prefer CNCF-conformant solutions
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true

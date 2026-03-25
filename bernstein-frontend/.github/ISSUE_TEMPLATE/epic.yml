@@ -1,0 +1,191 @@
+name: Epic
+description: A large outcome-focused initiative containing multiple features
+labels: ["type:epic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epics represent significant outcomes. They contain Features and are tracked in the Portfolio project.
+
+  - type: input
+    id: title
+    attributes:
+      label: Epic Title
+      description: Clear outcome-focused title
+      placeholder: "Enable automated deployment across all lab machines"
+    validations:
+      required: true
+
+  - type: textarea
+    id: business_value
+    attributes:
+      label: Business Value
+      description: Why does this epic matter? What outcome does it deliver?
+      placeholder: |
+        Describe the business or user outcome this epic delivers.
+        What problem does it solve? Who benefits?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: business_points
+    attributes:
+      label: Business Points
+      description: Relative business value (1-10)
+      options:
+        - "1"
+        - "2"
+        - "3"
+        - "4"
+        - "5"
+        - "6"
+        - "7"
+        - "8"
+        - "9"
+        - "10"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: value_type
+    attributes:
+      label: Value Type
+      description: Primary classification of this epic
+      options:
+        - Business feature
+        - Architecture
+        - Platform capability
+        - Technical debt
+        - Security
+        - Compliance / regulatory
+        - Reliability / resilience
+        - Performance / scalability
+        - Developer experience
+        - Research / spike
+    validations:
+      required: true
+
+  - type: dropdown
+    id: jtbd
+    attributes:
+      label: Job to be Done (JTBD)
+      description: What customer job does this epic serve?
+      options:
+        - Manage lab infrastructure efficiently
+        - Automate repetitive administrative tasks
+        - Ensure systems are secure and compliant
+        - Monitor and maintain system health
+        - Migrate workloads between platforms
+        - Backup and recover critical data
+        - Provision new machines quickly
+        - Document and share knowledge
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lifecycle_stage
+    attributes:
+      label: Lifecycle Stage
+      description: Current business lifecycle stage
+      options:
+        - Idea
+        - Validation
+        - Foundation
+        - MVP
+        - Launch
+        - Growth
+        - Scaling
+        - Maturity
+        - Maintenance
+        - Sunset
+        - Exit
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary Area
+      description: Main area this epic affects
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: success_criteria
+    attributes:
+      label: Success Criteria
+      description: How do we know this epic is complete?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: What is explicitly out of scope?
+      placeholder: |
+        - Not doing X
+        - Not including Y
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks_dependencies
+    attributes:
+      label: Risks and Dependencies
+      description: What could block or derail this epic?
+      placeholder: |
+        Risks:
+        - Risk 1
+
+        Dependencies:
+        - Depends on X
+    validations:
+      required: true
+
+  - type: input
+    id: target_release
+    attributes:
+      label: Target Release
+      description: Target release or milestone
+      placeholder: "v1.0.0 or Phase 3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      description: Overall risk assessment
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Business priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true

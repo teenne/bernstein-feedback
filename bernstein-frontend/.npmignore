@@ -1,0 +1,54 @@
+# Source code
+src/
+example/
+examples/
+scripts/
+specs/
+server/
+docs/
+
+# Tests
+__tests__/
+tests/
+*.test.ts
+*.spec.ts
+vitest.config.ts
+jsdom-setup.ts
+
+# Config
+vite.config.ts
+tsconfig.json
+tsconfig.node.json
+postcss.config.js
+tailwind.config.js
+.eslintrc.cjs
+.prettierrc
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+.claude/
+
+# Logs & Temp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+output*.txt
+vitest*.txt
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+TODO.md
+notes.md
+*.tsbuildinfo

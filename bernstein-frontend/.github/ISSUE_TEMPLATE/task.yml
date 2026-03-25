@@ -1,0 +1,154 @@
+name: Task
+description: A technical unit of work not directly user-facing
+labels: ["type:task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tasks are technical work items. They may belong to a Story or stand alone.
+
+  - type: input
+    id: title
+    attributes:
+      label: Task Title
+      description: Clear action-oriented title
+      placeholder: "Create Ansible role for SSH hardening"
+    validations:
+      required: true
+
+  - type: input
+    id: parent_story
+    attributes:
+      label: Parent Story or Feature
+      description: Link to parent (issue number) if applicable
+      placeholder: "#123"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Primary area this task affects
+      options:
+        - Automation
+        - Scripts
+        - Docs
+        - Security
+        - Backup
+        - Monitoring
+        - Inventory
+        - Infra
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: Allowed Paths
+      description: Which directories/files can be modified?
+      placeholder: |
+        - ansible/roles/ssh-hardening/
+        - docs/security.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts_touched
+    attributes:
+      label: Contracts Touched
+      description: Any interfaces, APIs, or shared contracts affected?
+      placeholder: |
+        - None
+    validations:
+      required: true
+
+  - type: textarea
+    id: interfaces_affected
+    attributes:
+      label: Interfaces Affected
+      description: CLI arguments, config formats, API changes?
+      placeholder: |
+        - New Ansible variables in defaults/main.yml
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Specific, testable criteria for completion
+      placeholder: |
+        - [ ] Role applies without errors
+        - [ ] SSH config matches CIS benchmark
+        - [ ] Idempotent on re-run
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests_required
+    attributes:
+      label: Tests Required
+      description: What tests must pass?
+      placeholder: |
+        - [ ] ansible-lint passes
+        - [ ] Molecule test (if available)
+        - [ ] Manual test on VM
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of Scope
+      description: What should NOT be done in this task?
+      placeholder: |
+        - Do not modify other roles
+        - Do not change inventory structure
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk_notes
+    attributes:
+      label: Risk Notes
+      description: Any risks or concerns?
+      placeholder: |
+        - May lock out SSH if misconfigured
+    validations:
+      required: false
+
+  - type: textarea
+    id: how_to_verify
+    attributes:
+      label: How to Verify
+      description: Step-by-step verification instructions
+      placeholder: |
+        1. Run playbook against test VM
+        2. Verify SSH settings with `sshd -T`
+        3. Confirm login still works
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true

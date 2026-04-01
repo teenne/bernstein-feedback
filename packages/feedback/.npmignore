@@ -1,0 +1,12 @@
+src/
+example/
+__tests__/
+.env*
+node_modules/
+*.config.js
+*.config.ts
+tsconfig*.json
+.claude/
+CLAUDE.md
+vitest.config.ts
+vite.embed.config.ts

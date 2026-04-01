@@ -1,0 +1,44 @@
+/* NOTE: @tailwind base is intentionally excluded — host apps provide their own reset */
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties for theming */
+:root {
+  --feedback-bg: #ffffff;
+  --feedback-bg-secondary: #f8fafc;
+  --feedback-text: #0f172a;
+  --feedback-text-muted: #64748b;
+  --feedback-border: #e2e8f0;
+  --feedback-primary: #3b82f6;
+  --feedback-primary-hover: #2563eb;
+  --feedback-error: #ef4444;
+  --feedback-success: #22c55e;
+  --feedback-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Dark mode support - Class based ONLY */
+:root.dark,
+[data-theme="dark"] {
+  --feedback-bg: #030712;
+  /* gray-950 */
+  --feedback-bg-secondary: #0f172a;
+  /* gray-900 */
+  --feedback-text: #f9fafb;
+  /* gray-50 */
+  --feedback-text-muted: #9ca3af;
+  /* gray-400 */
+  --feedback-border: #1f2937;
+  /* gray-800 */
+  --feedback-primary: #3b82f6;
+  /* blue-500 */
+  --feedback-primary-hover: #2563eb;
+  /* blue-600 */
+  --feedback-error: #ef4444;
+  --feedback-success: #22c55e;
+  --feedback-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+}
+
+/* Smooth transitions for interactive elements */
+.bf-transition-smooth {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}

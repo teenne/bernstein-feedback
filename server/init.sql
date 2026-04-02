@@ -27,7 +27,7 @@ CREATE TABLE feedback (
   metadata JSONB,
   
   -- Assets
-  screenshot TEXT,  -- base64 data URL
+  screenshots JSONB DEFAULT '[]',  -- array of base64 data URLs or storage URLs
   highlighted_element JSONB,
 
   -- Identity Fields

@@ -42,3 +42,12 @@
 .bf-transition-smooth {
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+/* Focus styles — high specificity to survive host app CSS overrides */
+[data-bernstein-dialog-content] input:focus,
+[data-bernstein-dialog-content] textarea:focus,
+[data-bernstein-dialog-content] select:focus {
+  outline: none !important;
+  box-shadow: 0 0 0 2px var(--feedback-primary, #3b82f6) !important;
+  border-color: transparent !important;
+}

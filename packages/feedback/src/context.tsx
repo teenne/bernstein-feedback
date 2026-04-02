@@ -333,6 +333,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           type: formState.type,
           project_id: config.projectId,
           timestamp: new Date().toISOString(),
+          event_id: crypto.randomUUID(),
           title: redactSecrets(formState.title),
           description: redactSecrets(formState.description),
           category: formState.category,

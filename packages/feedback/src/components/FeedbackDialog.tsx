@@ -5,7 +5,7 @@ import { useFeedback } from '../context';
 import { FeedbackErrorBoundary } from './ErrorBoundary';
 import { ConsentToggle } from './ConsentToggle';
 import { IntegrityFooter } from './IntegrityFooter';
-import type { FeedbackFormState, Impact, FeedbackType } from '../schemas';
+import type { FeedbackFormState, Impact, Severity, FeedbackCategory, FeedbackType } from '../schemas';
 import { useRef } from 'react';
 
 export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElement }) {
@@ -60,7 +60,11 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     setFormState((prev) => ({
       ...prev,
       type,
-      category: type === 'bug_report' ? 'bug' : type === 'feature_request' ? 'feature' : prev.category,
+      title: '',
+      description: '',
+      impact: undefined,
+      severity: undefined,
+      category: type === 'bug_report' ? 'bug' : type === 'feature_request' ? 'feature' : undefined,
     }));
   };
 
@@ -80,10 +84,16 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     );
   };
 
+  const [uploadError, setUploadError] = useState('');
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 5 * 1024 * 1024) return;
+      setUploadError('');
+      if (file.size > 5 * 1024 * 1024) {
+        setUploadError('File too large. Maximum size is 5MB.');
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         setFormState(prev => ({
@@ -303,6 +313,55 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                 />
               </div>
 
+              {/* Category selector (Feedback + Feature tabs) */}
+              {formState.type !== 'bug_report' && (
+                <div>
+                  <label className="bf-block bf-text-sm bf-font-medium bf-text-feedback-text bf-mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={formState.category || ''}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, category: (e.target.value || undefined) as FeedbackCategory | undefined }))}
+                    className="bf-w-full bf-px-3 bf-py-2.5 bf-border bf-border-feedback-border bf-rounded-lg bf-text-base md:bf-text-sm bf-text-feedback-text bf-bg-feedback-bg bf-transition-all bf-duration-200 focus:bf-outline-none focus:bf-ring-2 focus:bf-ring-feedback-primary focus:bf-border-transparent"
+                  >
+                    <option value="">Select category...</option>
+                    <option value="improvement">Improvement</option>
+                    <option value="feature">Feature</option>
+                    <option value="question">Question</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Bug-specific: Severity + Impact */}
+              {formState.type === 'bug_report' && (
+                <div>
+                  <label className="bf-block bf-text-sm bf-font-medium bf-text-feedback-text bf-mb-2">
+                    Severity
+                  </label>
+                  <div className="bf-flex bf-gap-2 bf-mb-4">
+                    {[
+                      { value: 'critical', label: 'Critical', color: 'bf-bg-red-50 bf-text-red-600 bf-border-red-200' },
+                      { value: 'high', label: 'High', color: 'bf-bg-amber-50 bf-text-amber-600 bf-border-amber-200' },
+                      { value: 'medium', label: 'Medium', color: 'bf-bg-blue-50/50 bf-text-blue-700 bf-border-blue-100' },
+                      { value: 'low', label: 'Low', color: 'bf-bg-emerald-50 bf-text-emerald-600 bf-border-emerald-200' },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setFormState((prev) => ({ ...prev, severity: option.value as Severity }))}
+                        className={`bf-flex-1 bf-px-3 bf-py-2 bf-text-sm bf-font-medium bf-rounded-lg bf-border bf-transition-all bf-duration-200 focus:bf-outline-none focus-visible:bf-ring-2 focus-visible:bf-ring-feedback-primary focus-visible:bf-ring-offset-1 ${formState.severity === option.value
+                          ? option.color + ' bf-ring-2 bf-ring-offset-1'
+                          : 'bf-bg-feedback-bg-secondary bf-text-feedback-text-muted bf-border-feedback-border hover:bf-border-feedback-text-muted'
+                          }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Bug-specific: Impact */}
               {formState.type === 'bug_report' && (
                 <div>
@@ -361,6 +420,7 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                     {formState.includeEmail && (
                       <input
                         type="email"
+                        required
                         value={formState.email || ''}
                         onChange={(e) => setFormState((prev) => ({ ...prev, email: e.target.value }))}
                         placeholder="your@email.com"
@@ -414,6 +474,12 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                       <div className="bf-p-2 bf-bg-blue-50/50 bf-border bf-border-blue-100 bf-rounded bf-text-[11px] bf-text-blue-700 bf-flex bf-justify-between bf-items-center bf-animate-fade-in">
                         <span className="bf-truncate bf-max-w-[80%]">Target: <code>{highlightedElement.selector}</code></span>
                         <button type="button" onClick={() => setHighlightedElement(undefined)} className="hover:bf-text-blue-900 bf-font-bold">✕</button>
+                      </div>
+                    )}
+
+                    {uploadError && (
+                      <div className="bf-p-2 bf-bg-red-50 bf-border bf-border-red-200 bf-rounded bf-text-xs bf-text-red-600 bf-animate-fade-in">
+                        {uploadError}
                       </div>
                     )}
 

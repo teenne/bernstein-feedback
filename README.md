@@ -31,13 +31,13 @@ The admin dashboard for managing feedback.
 - `src/hooks/` — Configuration, subscription, and auth hooks.
 - `e2e/` — End-to-end tests (Playwright).
 
-### 4. [server-django](./server-django)
+### 4. [server](./server)
 
-Django REST API backend (Python alternative — same API contract, same database).
+Node.js REST API backend (Express + PostgreSQL).
 
-- `feedback/views.py` — API views matching the Node server endpoints.
-- `feedback/models.py` — Django ORM model (reads the same PostgreSQL table).
-- `feedback/serializers.py` — DRF validation and serialization.
+- `src/index.ts` — API server entry point and route definitions.
+- `src/db.ts` — PostgreSQL connection and query helpers.
+- `init.sql` — Database schema auto-setup.
 
 ---
 

@@ -14,7 +14,6 @@ services:
     name: feedback-server
     runtime: node
     region: oregon
-    plan: free
     rootDir: server
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -35,7 +34,6 @@ services:
   - type: web
     name: feedback-admin
     runtime: static
-    plan: free
     rootDir: apps/admin
     buildCommand: npm install && npm run build
     staticPublishPath: dist

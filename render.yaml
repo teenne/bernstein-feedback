@@ -3,7 +3,7 @@
 
 databases:
   - name: feedback-db
-    plan: free
+    plan: starter
     region: oregon
     databaseName: feedback
     user: feedback_user

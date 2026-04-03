@@ -4,22 +4,28 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Configuration
-const MAX_RETRIES = 3; // Reduced for faster fallback
-const RETRY_DELAY = 1000;
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 2000;
 
 // State
 let useInMemory = false;
 const inMemoryStore: any[] = [];
 
-// PG Pool Setup
-const pool = new Pool({
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    database: process.env.DB_NAME || 'postgres',
-    connectionTimeoutMillis: 2000,
-});
+// PG Pool Setup — prefer DATABASE_URL (Render provides this), fall back to individual vars
+const pool = process.env.DATABASE_URL
+    ? new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
+        connectionTimeoutMillis: 5000,
+    })
+    : new Pool({
+        host: process.env.DB_HOST || '127.0.0.1',
+        port: parseInt(process.env.DB_PORT || '5432'),
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres',
+        database: process.env.DB_NAME || 'postgres',
+        connectionTimeoutMillis: 5000,
+    });
 
 // Robust Connection Logic with Fallback
 export const connectWithRetry = async (): Promise<void> => {

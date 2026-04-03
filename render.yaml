@@ -15,7 +15,7 @@ services:
     runtime: node
     region: oregon
     rootDir: server
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -34,9 +34,8 @@ services:
   - type: web
     name: feedback-admin
     runtime: static
-    rootDir: apps/admin
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
+    buildCommand: cd packages/feedback && npm install --include=dev && npm run build && cd ../../apps/admin && npm install && npm run build
+    staticPublishPath: apps/admin/dist
     routes:
       - type: rewrite
         source: /*

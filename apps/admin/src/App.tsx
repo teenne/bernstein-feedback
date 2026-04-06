@@ -62,8 +62,7 @@ export default function App() {
   const [localAuthed, setLocalAuthed] = useState(
     () => sessionStorage.getItem("feedback_admin_auth") === "true",
   );
-  const [activeProjectId, setActiveProjectId] =
-    useState<string>("feedback-admin");
+  const [activeProjectId, setActiveProjectId] = useState<string>("");
   const [userProjectIds, setUserProjectIds] = useState<string[]>([]);
   const auth = useAuth();
   const {
@@ -74,7 +73,7 @@ export default function App() {
     updateSetting,
     saveSettings,
     hasUnsavedChanges,
-  } = useFeedbackConfig();
+  } = useFeedbackConfig(activeProjectId);
 
   // Load user's accessible projects
   useEffect(() => {
@@ -227,7 +226,7 @@ export default function App() {
                       isPro={isPro}
                       loading={loading}
                       updateSetting={updateSetting}
-                      saveSettings={saveSettings}
+                      saveSettings={() => saveSettings(activeProjectId)}
                       hasUnsavedChanges={hasUnsavedChanges}
                       isAdmin={auth.isAdmin}
                       activeProjectId={activeProjectId}

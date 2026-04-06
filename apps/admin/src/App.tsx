@@ -1,12 +1,13 @@
-import { useState, lazy, Suspense } from 'react';
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { FeedbackProvider, FeedbackButton, FeedbackDialog, FeedbackToast, FeedbackErrorBoundary } from '@bernstein/feedback';
-import { autoAdapter } from '@bernstein/feedback/adapters';
+import { supabaseAdapter, consoleAdapter, httpAdapter } from '@bernstein/feedback/adapters';
 import '@bernstein/feedback/styles.css';
 
 import { useFeedbackConfig } from './hooks/useFeedbackConfig';
 import { useAuth } from './hooks/useAuth';
 import { supabase } from './lib/supabaseClient';
+import { fetchUserProjectIds } from './lib/feedbackApi';
 
 // Lazy loaded pages
 const FeedbackListPage = lazy(() => import('./pages/FeedbackListPage').then(m => ({ default: m.FeedbackListPage })));
@@ -18,14 +19,9 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ defa
 // Lazy loaded auth
 const AuthGateway = lazy(() => import('./auth/AuthGateway'));
 const LocalLoginPage = lazy(() => import('./auth/LocalLoginPage'));
+const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 
 const hasSupabase = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
-
-const feedbackAdapter = autoAdapter({
-    supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
-    supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-    localServerUrl: import.meta.env.VITE_API_URL || 'http://localhost:3000',
-});
 
 // Loading spinner
 function PageLoader() {
@@ -38,11 +34,46 @@ function PageLoader() {
 
 export default function App() {
     const [localAuthed, setLocalAuthed] = useState(() => sessionStorage.getItem('feedback_admin_auth') === 'true');
+    const [activeProjectId, setActiveProjectId] = useState<string>('feedback-admin');
+    const [userProjectIds, setUserProjectIds] = useState<string[]>([]);
     const auth = useAuth();
     const {
         config, rawConfig, isPro, loading,
         updateSetting, saveSettings, hasUnsavedChanges,
     } = useFeedbackConfig();
+
+    // Load user's accessible projects
+    useEffect(() => {
+        if (!auth.isLoggedIn) return;
+        (async () => {
+            try {
+                const ids = await fetchUserProjectIds();
+                setUserProjectIds(ids);
+                if (ids.length > 0) setActiveProjectId(ids[0]);
+            } catch {}
+        })();
+    }, [auth.isLoggedIn]);
+
+    // Build adapter based on raw settings
+    // Auto-use Supabase adapter when Supabase env vars are configured
+    const feedbackAdapter = useMemo(() => {
+        const supabaseUrl = rawConfig.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = rawConfig.supabaseKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
+        const apiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/$/, '');
+
+        switch (rawConfig.adapterId) {
+            case 'supabase':
+                if (supabaseUrl && supabaseKey) {
+                    return supabaseAdapter({ supabaseUrl, supabaseKey });
+                }
+                return httpAdapter({ endpoint: `${apiUrl}/api/feedback` });
+            case 'console':
+                return consoleAdapter();
+            case 'local':
+            default:
+                return httpAdapter({ endpoint: `${apiUrl}/api/feedback` });
+        }
+    }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);
 
     // Auth gate
     const isAuthenticated = hasSupabase ? auth.isLoggedIn : localAuthed;
@@ -63,7 +94,10 @@ export default function App() {
         { to: '/stats', label: 'Stats' },
         { to: '/demo', label: 'Demo' },
         { to: '/settings', label: 'Settings' },
-        ...(auth.isAdmin ? [{ to: '/admin', label: 'Admin Portal' }] : []),
+        ...(auth.isAdmin ? [
+            { to: '/admin', label: 'Admin Portal' },
+            { to: '/admin/users', label: 'Users' },
+        ] : []),
     ];
 
     const handleSignOut = () => {
@@ -76,7 +110,7 @@ export default function App() {
 
     return (
         <FeedbackErrorBoundary>
-            <FeedbackProvider config={{ ...config, projectId: 'feedback-admin', adapter: feedbackAdapter }}>
+            <FeedbackProvider config={{ ...config, projectId: activeProjectId, adapter: feedbackAdapter }}>
                 <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
                     {/* Header */}
                     <header className="sticky top-0 z-50 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
@@ -96,6 +130,17 @@ export default function App() {
                                         </NavLink>
                                     ))}
                                 </nav>
+                                {userProjectIds.length > 1 && (
+                                    <select
+                                        value={activeProjectId}
+                                        onChange={(e) => setActiveProjectId(e.target.value)}
+                                        className="px-2 py-1 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300"
+                                    >
+                                        {userProjectIds.map(id => (
+                                            <option key={id} value={id}>{id}</option>
+                                        ))}
+                                    </select>
+                                )}
                                 <div className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-gray-700">
                                     <span className={`w-2 h-2 rounded-full ${auth.isAdmin ? 'bg-amber-500' : 'bg-green-500'}`} />
                                     <span className="text-xs text-gray-500 hidden md:inline">
@@ -129,9 +174,11 @@ export default function App() {
                                         saveSettings={saveSettings}
                                         hasUnsavedChanges={hasUnsavedChanges}
                                         isAdmin={auth.isAdmin}
+                                        activeProjectId={activeProjectId}
                                     />
                                 } />
                                 {auth.isAdmin && <Route path="/admin" element={<AuthGateway />} />}
+                                {auth.isAdmin && <Route path="/admin/users" element={<UserManagementPage />} />}
                                 <Route path="*" element={<Navigate to="/feedback" replace />} />
                             </Routes>
                         </Suspense>

@@ -1,4 +1,4 @@
-import { Pool, PoolClient, QueryResult } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -12,13 +12,18 @@ let useInMemory = false;
 const inMemoryStore: any[] = [];
 
 // PG Pool Setup
+// Auto-detect cloud DB (needs SSL) vs local (no SSL)
+const host = process.env.DB_HOST || '127.0.0.1';
+const isCloudDB = host !== '127.0.0.1' && host !== 'localhost';
+
 const pool = new Pool({
-    host: process.env.DB_HOST || '127.0.0.1',
+    host,
     port: parseInt(process.env.DB_PORT || '5432'),
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'postgres',
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 5000,
+    ssl: isCloudDB ? { rejectUnauthorized: false } : false,
 });
 
 // Robust Connection Logic with Fallback

@@ -55,7 +55,7 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
             .from('projects')
             .select('config')
             .eq('id', pid)
-            .single();
+            .maybeSingle();
         if (error) {
             console.error('Failed to fetch managed config:', error);
             return;
@@ -69,7 +69,6 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
         if (isPro) return config;
         return {
             ...config,
-            adapterId: 'local' as const,
             themeColor: '#f59e0b',
             showBranding: true,
             maxConsoleErrors: 10,

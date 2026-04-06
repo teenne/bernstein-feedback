@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { fetchFeedbackList, fetchUserProjectIds } from '../lib/feedbackApi';
 
 interface FeedbackItem {
     id: string;
@@ -33,34 +34,36 @@ export function FeedbackListPage() {
     const [items, setItems] = useState<FeedbackItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [userProjects, setUserProjects] = useState<string[]>([]);
 
     const typeFilter = searchParams.get('type') || '';
     const projectFilter = searchParams.get('project_id') || '';
 
-    const fetchFeedback = async () => {
+    useEffect(() => {
+        (async () => {
+            const ids = await fetchUserProjectIds();
+            setUserProjects(ids);
+        })();
+    }, []);
+
+    const fetchData = async () => {
         setLoading(true);
         setError('');
         try {
-            const params = new URLSearchParams();
-            if (typeFilter) params.set('type', typeFilter);
-            if (projectFilter) params.set('project_id', projectFilter);
-            params.set('limit', '100');
-
-            const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/feedback?${params}`);
-            const json = await res.json();
-            if (json.success) {
-                setItems(json.data);
-            } else {
-                setError(json.error);
-            }
-        } catch (err) {
-            setError('Failed to connect to server. Is it running on localhost:3000?');
+            const data = await fetchFeedbackList({
+                type: typeFilter || undefined,
+                project_id: projectFilter || undefined,
+                limit: 100,
+            });
+            setItems(data);
+        } catch (err: any) {
+            setError(err.message || 'Failed to load feedback');
         }
         setLoading(false);
     };
 
     useEffect(() => {
-        fetchFeedback();
+        fetchData();
     }, [typeFilter, projectFilter]);
 
     const setFilter = (key: string, value: string) => {
@@ -83,7 +86,6 @@ export function FeedbackListPage() {
 
     return (
         <div>
-            {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div>
                     <h1 className="text-2xl font-bold">Feedback</h1>
@@ -92,14 +94,13 @@ export function FeedbackListPage() {
                     </p>
                 </div>
                 <button
-                    onClick={fetchFeedback}
+                    onClick={fetchData}
                     className="px-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                 >
                     Refresh
                 </button>
             </div>
 
-            {/* Filters */}
             <div className="flex gap-2 mb-4">
                 <select
                     value={typeFilter}
@@ -111,36 +112,35 @@ export function FeedbackListPage() {
                     <option value="bug_report">Bug Report</option>
                     <option value="feature_request">Feature Request</option>
                 </select>
-                <input
-                    type="text"
-                    placeholder="Filter by project_id..."
+                <select
                     value={projectFilter}
                     onChange={e => setFilter('project_id', e.target.value)}
-                    className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 w-48"
-                />
+                    className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                >
+                    <option value="">All Projects</option>
+                    {userProjects.map(pid => (
+                        <option key={pid} value={pid}>{pid}</option>
+                    ))}
+                </select>
             </div>
 
-            {/* Error */}
             {error && (
                 <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
                     {error}
                 </div>
             )}
 
-            {/* Loading */}
             {loading && (
                 <div className="text-center py-12 text-gray-400">Loading...</div>
             )}
 
-            {/* Empty */}
             {!loading && items.length === 0 && !error && (
                 <div className="text-center py-12">
                     <p className="text-gray-400 text-lg">No feedback yet</p>
-                    <p className="text-gray-400 text-sm mt-1">Submit feedback from BAS or Meraki to see it here</p>
+                    <p className="text-gray-400 text-sm mt-1">Submit feedback to see it here</p>
                 </div>
             )}
 
-            {/* Table */}
             {!loading && items.length > 0 && (
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
                     <table className="w-full text-sm">
@@ -207,7 +207,7 @@ function parseScreenshots(screenshots: string | string[] | null): string[] {
 
 function ScreenshotIndicator({ screenshots, itemId }: { screenshots: string | string[] | null; itemId: string }) {
     const files = parseScreenshots(screenshots);
-    if (files.length === 0) return <span className="text-gray-300">—</span>;
+    if (files.length === 0) return <span className="text-gray-300">&mdash;</span>;
 
     return (
         <div className="flex items-center gap-1.5">

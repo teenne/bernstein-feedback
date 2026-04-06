@@ -69,13 +69,10 @@ export function autoAdapter(options: AutoAdapterOptions = {}): FeedbackAdapter &
 
     return {
         async submit(event) {
+            // If Supabase is configured, use ONLY Supabase (no Node server call)
+            // If not configured, use ONLY the Node server
             if (cloud) {
-                const result = await cloud.submit(event);
-                if (result.success) return result;
-
-                // Cloud failed — fallback to local server so no data is lost
-                console.warn('[Feedback] Supabase failed, trying local server:', result.error);
-                return local.submit(event);
+                return cloud.submit(event);
             }
 
             return local.submit(event);

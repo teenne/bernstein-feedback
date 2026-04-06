@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { fetchFeedbackById } from '../lib/feedbackApi';
 
 interface FeedbackDetail {
     id: string;
@@ -32,21 +33,10 @@ export function FeedbackDetailPage() {
     useEffect(() => {
         (async () => {
             try {
-                const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/feedback/${id}`);
-                const json = await res.json();
-                if (json.success) {
-                    const data = json.data;
-                    // Parse JSON strings if needed
-                    if (typeof data.context === 'string') data.context = JSON.parse(data.context);
-                    if (typeof data.screenshots === 'string') data.screenshots = JSON.parse(data.screenshots);
-                    if (typeof data.metadata === 'string') data.metadata = JSON.parse(data.metadata);
-                    if (typeof data.highlighted_element === 'string') data.highlighted_element = JSON.parse(data.highlighted_element);
-                    setItem(data);
-                } else {
-                    setError(json.error);
-                }
-            } catch {
-                setError('Failed to load feedback');
+                const data = await fetchFeedbackById(id!);
+                setItem(data);
+            } catch (err: any) {
+                setError(err.message || 'Failed to load feedback');
             }
             setLoading(false);
         })();
@@ -64,15 +54,13 @@ export function FeedbackDetailPage() {
 
     return (
         <div>
-            {/* Back button */}
             <button
                 onClick={() => navigate('/feedback')}
                 className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 mb-4 flex items-center gap-1"
             >
-                ← Back to list
+                &larr; Back to list
             </button>
 
-            {/* Header */}
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 mb-4">
                 <div className="flex items-start justify-between">
                     <div>
@@ -88,7 +76,6 @@ export function FeedbackDetailPage() {
                     </div>
                 </div>
 
-                {/* Meta grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
                     <MetaItem label="Project" value={item.project_id} />
                     <MetaItem label="Category" value={item.category} />
@@ -101,7 +88,6 @@ export function FeedbackDetailPage() {
                 </div>
             </div>
 
-            {/* Screenshots */}
             {screenshots.length > 0 && (
                 <Section title={`Screenshots (${screenshots.length})`}>
                     <div className="flex gap-3 flex-wrap">
@@ -118,7 +104,6 @@ export function FeedbackDetailPage() {
                 </Section>
             )}
 
-            {/* Console Errors */}
             {consoleErrors.length > 0 && (
                 <Section title={`Console Errors (${consoleErrors.length})`}>
                     <div className="space-y-2">
@@ -133,7 +118,6 @@ export function FeedbackDetailPage() {
                 </Section>
             )}
 
-            {/* Network Errors */}
             {networkErrors.length > 0 && (
                 <Section title={`Network Errors (${networkErrors.length})`}>
                     <div className="space-y-2">
@@ -155,7 +139,6 @@ export function FeedbackDetailPage() {
                 </Section>
             )}
 
-            {/* Breadcrumbs */}
             {breadcrumbs.length > 0 && (
                 <Section title={`User Actions (${breadcrumbs.length})`}>
                     <div className="space-y-1">
@@ -176,11 +159,10 @@ export function FeedbackDetailPage() {
                 </Section>
             )}
 
-            {/* Browser Context */}
             <Section title="Browser Context">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <MetaItem label="User Agent" value={context.userAgent?.substring(0, 60)} />
-                    <MetaItem label="Viewport" value={context.viewport ? `${context.viewport.width}×${context.viewport.height}` : null} />
+                    <MetaItem label="Viewport" value={context.viewport ? `${context.viewport.width}\u00d7${context.viewport.height}` : null} />
                     <MetaItem label="Language" value={context.language} />
                     <MetaItem label="Environment" value={context.env} />
                     <MetaItem label="App Version" value={context.appVersion} />
@@ -188,7 +170,6 @@ export function FeedbackDetailPage() {
                 </div>
             </Section>
 
-            {/* Raw JSON */}
             <Section title="Raw Data">
                 <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-4 rounded-lg overflow-x-auto max-h-96">
                     {JSON.stringify(item, null, 2)}
@@ -212,7 +193,7 @@ function MetaItem({ label, value }: { label: string; value: string | null | unde
         <div>
             <p className="text-xs text-gray-400">{label}</p>
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">
-                {value || '—'}
+                {value || '\u2014'}
             </p>
         </div>
     );

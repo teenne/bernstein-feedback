@@ -1,5 +1,5 @@
 {
-  "name": "@bernstein/feedback",
+  "name": "akk-feedback",
   "version": "1.0.0",
   "description": "Drop-in feedback widget for React apps with automatic context capture",
   "type": "module",

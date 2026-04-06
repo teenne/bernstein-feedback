@@ -6,13 +6,13 @@ import {
   FeedbackDialog,
   FeedbackToast,
   FeedbackErrorBoundary,
-} from "@bernstein/feedback";
+} from "akk-feedback";
 import {
   supabaseAdapter,
   consoleAdapter,
   httpAdapter,
-} from "@bernstein/feedback/adapters";
-import "@bernstein/feedback/styles.css";
+} from "akk-feedback/adapters";
+import "akk-feedback/styles.css";
 
 import { useFeedbackConfig } from "./hooks/useFeedbackConfig";
 import { useAuth } from "./hooks/useAuth";

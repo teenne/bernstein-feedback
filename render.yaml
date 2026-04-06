@@ -34,8 +34,9 @@ services:
   - type: web
     name: feedback-admin
     runtime: static
-    buildCommand: cd packages/feedback && npm install --include=dev && npm run build && cd ../../apps/admin && npm install && npm run build
-    staticPublishPath: apps/admin/dist
+    rootDir: apps/admin
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
     routes:
       - type: rewrite
         source: /*

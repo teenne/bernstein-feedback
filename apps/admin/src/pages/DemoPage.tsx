@@ -1,4 +1,4 @@
-import { useFeedback } from '@bernstein/feedback';
+import { useFeedback } from 'akk-feedback';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 

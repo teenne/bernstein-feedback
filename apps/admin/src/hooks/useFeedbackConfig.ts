@@ -46,6 +46,25 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
         return DEFAULT_CONFIG;
     });
 
+    // Reload config when project ID changes
+    useEffect(() => {
+        if (initialProjectId === projectId) return;
+        setProjectId(initialProjectId);
+        setHasUnsavedChanges(false);
+
+        // Load from localStorage first
+        try {
+            const saved = localStorage.getItem(`${STORAGE_KEY}_${initialProjectId}`);
+            if (saved) {
+                setConfig(prev => ({ ...prev, ...JSON.parse(saved) }));
+            } else {
+                setConfig(DEFAULT_CONFIG);
+            }
+        } catch {
+            setConfig(DEFAULT_CONFIG);
+        }
+    }, [initialProjectId]);
+
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const { isPro, loading, checkSubscription } = useSubscription(projectId);
 
@@ -87,10 +106,10 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
 
     const saveSettings = useCallback(async (targetProjectId?: string) => {
         const pid = targetProjectId || projectId;
-        if (typeof window === 'undefined') return;
+        if (typeof window === 'undefined' || !pid) return;
         try {
             localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(config));
-            if (supabase) {
+            if (supabase && pid) {
                 const { error } = await supabase
                     .from('projects')
                     .update({ config } as any)

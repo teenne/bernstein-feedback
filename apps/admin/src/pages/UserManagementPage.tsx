@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { GlassCard } from '../components/GlassCard';
 import { LayoutWrapper } from '../components/LayoutWrapper';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useAuth } from '../hooks/useAuth';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -20,6 +21,7 @@ export default function UserManagementPage() {
     const [users, setUsers] = useState<UserRole[]>([]);
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState<string | null>(null);
+    const [confirmDialog, setConfirmDialog] = useState<{ user: UserRole; newRole: string } | null>(null);
     const { userId } = useAuth();
 
     const fetchUsers = async () => {
@@ -47,10 +49,9 @@ export default function UserManagementPage() {
         fetchUsers();
     }, []);
 
-    const handleToggleRole = async (user: UserRole) => {
+    const handleToggleRole = (user: UserRole) => {
         const newRole = user.role === 'admin' ? 'user' : 'admin';
 
-        // Prevent last admin from demoting themselves
         if (newRole === 'user' && user.user_id === userId) {
             const adminCount = users.filter(u => u.role === 'admin').length;
             if (adminCount <= 1) {
@@ -59,8 +60,13 @@ export default function UserManagementPage() {
             }
         }
 
-        if (!confirm(`Change ${user.email} from "${user.role}" to "${newRole}"?`)) return;
+        setConfirmDialog({ user, newRole });
+    };
 
+    const doToggleRole = async () => {
+        if (!confirmDialog) return;
+        const { user, newRole } = confirmDialog;
+        setConfirmDialog(null);
         setUpdating(user.user_id);
         try {
             if (useSupabaseDirectly) {
@@ -172,6 +178,15 @@ export default function UserManagementPage() {
                     )}
                 </GlassCard>
             </div>
+            <ConfirmDialog
+                open={!!confirmDialog}
+                title="Change Role"
+                message={confirmDialog ? `Change ${confirmDialog.user.email} from "${confirmDialog.user.role}" to "${confirmDialog.newRole}"?` : ''}
+                variant="warning"
+                confirmLabel="Change Role"
+                onConfirm={doToggleRole}
+                onCancel={() => setConfirmDialog(null)}
+            />
         </LayoutWrapper>
     );
 }

@@ -4,7 +4,11 @@ import { supabase } from '../lib/supabaseClient';
 import LoginPage from './LoginPage';
 import Dashboard from './Dashboard';
 
-export default function AuthGateway() {
+interface AuthGatewayProps {
+    onProjectSelect?: (projectId: string) => void;
+}
+
+export default function AuthGateway({ onProjectSelect }: AuthGatewayProps = {}) {
     const [session, setSession] = useState<Session | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -42,5 +46,5 @@ export default function AuthGateway() {
         return <LoginPage />;
     }
 
-    return <Dashboard session={session} />;
+    return <Dashboard session={session} onProjectSelect={onProjectSelect} />;
 }

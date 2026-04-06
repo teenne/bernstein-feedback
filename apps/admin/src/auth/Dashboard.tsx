@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { SettingsPage } from '../pages/SettingsPage';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
 import { useAuth } from '../hooks/useAuth';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
 
 interface DashboardProps {
     session: Session;
+    onProjectSelect?: (projectId: string) => void;
 }
 
 interface Project {
@@ -22,10 +24,14 @@ interface Project {
     created_at: string;
 }
 
-export default function Dashboard({ session }: DashboardProps) {
+export default function Dashboard({ session, onProjectSelect }: DashboardProps) {
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
-    const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+    const [selectedProjectId, _setSelectedProjectId] = useState<string | null>(null);
+    const setSelectedProjectId = (id: string | null) => {
+        _setSelectedProjectId(id);
+        if (id && onProjectSelect) onProjectSelect(id);
+    };
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [createForm, setCreateForm] = useState({ id: '', name: '', description: '' });
     const [createError, setCreateError] = useState('');
@@ -33,6 +39,7 @@ export default function Dashboard({ session }: DashboardProps) {
     const [members, setMembers] = useState<{ id: string; user_id: string; email: string; role: string; created_at: string }[]>([]);
     const [memberEmail, setMemberEmail] = useState('');
     const [addingMember, setAddingMember] = useState(false);
+    const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; variant: 'danger' | 'warning' | 'default'; confirmLabel: string; onConfirm: () => void } | null>(null);
 
     const { isAdmin } = useAuth();
 
@@ -151,18 +158,28 @@ export default function Dashboard({ session }: DashboardProps) {
         setAddingMember(false);
     };
 
-    const handleRemoveMember = async (memberId: string, memberUserId: string) => {
+    const handleRemoveMember = (memberId: string, memberUserId: string) => {
         if (!selectedProjectId) return;
-        if (!confirm('Remove this member from the project?')) return;
+        setConfirmDialog({
+            title: 'Remove Member',
+            message: 'Are you sure you want to remove this member from the project?',
+            variant: 'warning',
+            confirmLabel: 'Remove',
+            onConfirm: () => doRemoveMember(selectedProjectId!, memberUserId),
+        });
+    };
+
+    const doRemoveMember = async (projectId: string, memberUserId: string) => {
+        setConfirmDialog(null);
         try {
             if (useSupabaseDirectly) {
                 await supabase!.from('project_members').delete()
-                    .eq('project_id', selectedProjectId)
+                    .eq('project_id', projectId)
                     .eq('user_id', memberUserId);
             } else {
-                await fetch(`${API_URL}/api/projects/${selectedProjectId}/members/${memberUserId}`, { method: 'DELETE' });
+                await fetch(`${API_URL}/api/projects/${projectId}/members/${memberUserId}`, { method: 'DELETE' });
             }
-            fetchMembers(selectedProjectId);
+            fetchMembers(projectId);
         } catch { alert('Failed to connect to server'); }
     };
 
@@ -238,8 +255,18 @@ export default function Dashboard({ session }: DashboardProps) {
         } catch { alert('Failed to connect to server'); }
     };
 
-    const handleDeleteProject = async (projectId: string) => {
-        if (!confirm(`Delete project "${projectId}"? All feedback for this project will remain in the database.`)) return;
+    const handleDeleteProject = (projectId: string) => {
+        setConfirmDialog({
+            title: 'Delete Project',
+            message: `Delete "${projectId}"? All feedback for this project will remain in the database.`,
+            variant: 'danger',
+            confirmLabel: 'Delete',
+            onConfirm: () => doDeleteProject(projectId),
+        });
+    };
+
+    const doDeleteProject = async (projectId: string) => {
+        setConfirmDialog(null);
         try {
             if (useSupabaseDirectly) {
                 const { error } = await supabase!.from('projects').delete().eq('id', projectId);
@@ -285,10 +312,10 @@ export default function Dashboard({ session }: DashboardProps) {
                     ))}
 
                     <div className="pt-6">
-                        <button onClick={() => window.location.reload()} className="flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors w-full text-left">
+                        <a href="/feedback" className="flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors w-full text-left">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-arrow-left w-4 h-4"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
                             Back to Home
-                        </button>
+                        </a>
                     </div>
                 </nav>
 
@@ -485,6 +512,17 @@ export default function Dashboard({ session }: DashboardProps) {
                     )}
                 </div>
             </main>
+
+            {/* Confirm Dialog */}
+            <ConfirmDialog
+                open={!!confirmDialog}
+                title={confirmDialog?.title || ''}
+                message={confirmDialog?.message || ''}
+                variant={confirmDialog?.variant || 'default'}
+                confirmLabel={confirmDialog?.confirmLabel || 'Confirm'}
+                onConfirm={() => confirmDialog?.onConfirm()}
+                onCancel={() => setConfirmDialog(null)}
+            />
 
             {/* Create Project Modal */}
             {showCreateModal && (

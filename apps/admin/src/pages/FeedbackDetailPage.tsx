@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchFeedbackById } from '../lib/feedbackApi';
+import { LayoutWrapper } from '../components/LayoutWrapper';
+import { GlassCard } from '../components/GlassCard';
 
 interface FeedbackDetail {
     id: string;
@@ -42,8 +44,19 @@ export function FeedbackDetailPage() {
         })();
     }, [id]);
 
-    if (loading) return <div className="text-center py-12 text-gray-400">Loading...</div>;
-    if (error) return <div className="p-4 bg-red-50 text-red-600 rounded-lg">{error}</div>;
+    if (loading) return (
+        <LayoutWrapper>
+            <div className="flex flex-col items-center justify-center py-20">
+                <div className="h-10 w-10 border-2 border-amber-500 rounded-full border-t-transparent animate-spin mb-4" />
+                <p className="text-sm text-gray-400">Loading feedback...</p>
+            </div>
+        </LayoutWrapper>
+    );
+    if (error) return (
+        <LayoutWrapper>
+            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-xl text-sm">{error}</div>
+        </LayoutWrapper>
+    );
     if (!item) return null;
 
     const context = item.context || {};
@@ -53,15 +66,19 @@ export function FeedbackDetailPage() {
     const screenshots = Array.isArray(item.screenshots) ? item.screenshots : [];
 
     return (
-        <div>
+        <LayoutWrapper>
+        <div className="max-w-5xl mx-auto w-full space-y-4">
             <button
                 onClick={() => navigate('/feedback')}
-                className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 mb-4 flex items-center gap-1"
+                className="text-sm text-gray-500 hover:text-amber-500 dark:hover:text-amber-400 mb-2 flex items-center gap-1 transition-colors"
             >
-                &larr; Back to list
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+                </svg>
+                Back to list
             </button>
 
-            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 mb-4">
+            <GlassCard>
                 <div className="flex items-start justify-between">
                     <div>
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${item.type === 'bug_report' ? 'bg-red-100 text-red-700' : item.type === 'feature_request' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
@@ -86,10 +103,10 @@ export function FeedbackDetailPage() {
                     <MetaItem label="Screen" value={item.screen_id || context.screenId} />
                     <MetaItem label="URL" value={context.url} />
                 </div>
-            </div>
+            </GlassCard>
 
             {screenshots.length > 0 && (
-                <Section title={`Screenshots (${screenshots.length})`}>
+                <GlassCard title={`Screenshots (${screenshots.length})`}>
                     <div className="flex gap-3 flex-wrap">
                         {screenshots.map((src: string, i: number) => (
                             <a key={i} href={src} target="_blank" rel="noopener noreferrer">
@@ -101,11 +118,11 @@ export function FeedbackDetailPage() {
                             </a>
                         ))}
                     </div>
-                </Section>
+                </GlassCard>
             )}
 
             {consoleErrors.length > 0 && (
-                <Section title={`Console Errors (${consoleErrors.length})`}>
+                <GlassCard title={`Console Errors (${consoleErrors.length})`}>
                     <div className="space-y-2">
                         {consoleErrors.map((err: any, i: number) => (
                             <div key={i} className="p-3 bg-red-50 dark:bg-red-900/10 rounded-lg">
@@ -115,11 +132,11 @@ export function FeedbackDetailPage() {
                             </div>
                         ))}
                     </div>
-                </Section>
+                </GlassCard>
             )}
 
             {networkErrors.length > 0 && (
-                <Section title={`Network Errors (${networkErrors.length})`}>
+                <GlassCard title={`Network Errors (${networkErrors.length})`}>
                     <div className="space-y-2">
                         {networkErrors.map((err: any, i: number) => (
                             <div key={i} className="p-3 bg-orange-50 dark:bg-orange-900/10 rounded-lg flex items-center justify-between">
@@ -136,11 +153,11 @@ export function FeedbackDetailPage() {
                             </div>
                         ))}
                     </div>
-                </Section>
+                </GlassCard>
             )}
 
             {breadcrumbs.length > 0 && (
-                <Section title={`User Actions (${breadcrumbs.length})`}>
+                <GlassCard title={`User Actions (${breadcrumbs.length})`}>
                     <div className="space-y-1">
                         {breadcrumbs.map((b: any, i: number) => (
                             <div key={i} className="flex items-baseline gap-2 text-sm">
@@ -156,10 +173,10 @@ export function FeedbackDetailPage() {
                             </div>
                         ))}
                     </div>
-                </Section>
+                </GlassCard>
             )}
 
-            <Section title="Browser Context">
+            <GlassCard title="Browser Context">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <MetaItem label="User Agent" value={context.userAgent?.substring(0, 60)} />
                     <MetaItem label="Viewport" value={context.viewport ? `${context.viewport.width}\u00d7${context.viewport.height}` : null} />
@@ -168,23 +185,15 @@ export function FeedbackDetailPage() {
                     <MetaItem label="App Version" value={context.appVersion} />
                     <MetaItem label="Route" value={context.route} />
                 </div>
-            </Section>
+            </GlassCard>
 
-            <Section title="Raw Data">
-                <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-4 rounded-lg overflow-x-auto max-h-96">
+            <GlassCard title="Raw Data">
+                <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto max-h-96">
                     {JSON.stringify(item, null, 2)}
                 </pre>
-            </Section>
+            </GlassCard>
         </div>
-    );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-    return (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 mb-4">
-            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">{title}</h2>
-            {children}
-        </div>
+        </LayoutWrapper>
     );
 }
 

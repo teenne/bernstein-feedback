@@ -1,0 +1,49 @@
+# Render Blueprint — @bernstein/feedback infrastructure
+# Deploy via: Render Dashboard > New Blueprint Instance > Connect this repo
+
+databases:
+  - name: feedback-db
+    plan: basic-256mb
+    region: oregon
+    databaseName: feedback
+    user: feedback_user
+
+services:
+  # Express API Server
+  - type: web
+    name: feedback-server
+    runtime: node
+    region: oregon
+    rootDir: server
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: feedback-db
+          property: connectionString
+      - key: ALLOWED_ORIGINS
+        # Admin panel + all client apps that use the feedback widget
+        # Update these URLs after deployment with actual Render URLs
+        value: https://feedback-admin.onrender.com,https://meraki-frontend.onrender.com,https://bas-core-react.onrender.com
+
+  # Admin Panel (Static Site)
+  - type: web
+    name: feedback-admin
+    runtime: static
+    buildCommand: cd packages/feedback && npm install --include=dev && npm run build && cd ../../apps/admin && npm install && npm run build
+    staticPublishPath: apps/admin/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false  # Set to feedback-server URL (e.g., https://feedback-server.onrender.com)
+      - key: VITE_ADMIN_PASSWORD
+        sync: false  # Set manually
+      - key: VITE_ADMIN_EMAILS
+        sync: false  # Set manually

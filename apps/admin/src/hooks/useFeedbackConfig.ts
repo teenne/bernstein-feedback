@@ -17,8 +17,10 @@ export interface FeedbackConfigState {
     showBranding: boolean;
 }
 
+const hasSupabaseEnv = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+
 const DEFAULT_CONFIG: FeedbackConfigState = {
-    adapterId: 'local',
+    adapterId: hasSupabaseEnv ? 'supabase' : 'local',
     supabaseUrl: import.meta.env.VITE_SUPABASE_URL || '',
     supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
     themeColor: '#f59e0b',

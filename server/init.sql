@@ -15,7 +15,8 @@ DROP TABLE IF EXISTS user_roles;
 CREATE TABLE user_roles (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id TEXT UNIQUE NOT NULL,
-  email TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT,
   role TEXT NOT NULL CHECK (role IN ('admin', 'user')) DEFAULT 'user',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

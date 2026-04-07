@@ -1,13 +1,16 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { connectWithRetry, query } from './db';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'bernstein-feedback-secret-change-in-production';
 
 // Bind to 0.0.0.0 in production (Render), 127.0.0.1 in development
 const HOST = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
@@ -21,7 +24,7 @@ app.use(express.json({ limit: '10mb' })); // Allow large payloads for screenshot
 
 // Validation Schema — matches frontend FeedbackEvent
 const FeedbackSchema = z.object({
-    project_id: z.string(),
+    project_id: z.string().min(1, 'project_id is required'),
     type: z.enum(['feedback', 'bug_report', 'feature_request']),
     timestamp: z.string().datetime().optional(),
     event_id: z.string().optional(),
@@ -44,53 +47,158 @@ const FeedbackSchema = z.object({
 }).passthrough();
 
 // ──────────────────────────────
-// User Roles
+// JWT Helpers & Auth Middleware
 // ──────────────────────────────
 
-// Register / login user — auto-assigns role (first user = admin)
-app.post('/api/auth/role', async (req, res) => {
+interface JwtPayload {
+    user_id: string;
+    email: string;
+    role: 'admin' | 'user';
+}
+
+function generateToken(payload: JwtPayload): string {
+    return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function verifyToken(token: string): JwtPayload | null {
     try {
-        const { user_id, email } = req.body;
-        if (!user_id || !email) {
-            res.status(400).json({ success: false, error: 'user_id and email are required' });
+        return jwt.verify(token, JWT_SECRET) as JwtPayload;
+    } catch {
+        return null;
+    }
+}
+
+// Middleware: require valid JWT
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) {
+        res.status(401).json({ success: false, error: 'Authentication required' });
+        return;
+    }
+
+    const payload = verifyToken(header.slice(7));
+    if (!payload) {
+        res.status(401).json({ success: false, error: 'Invalid or expired token' });
+        return;
+    }
+
+    (req as any).user = payload;
+    next();
+}
+
+// Middleware: require admin role
+function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as JwtPayload;
+    if (user.role !== 'admin') {
+        res.status(403).json({ success: false, error: 'Admin access required' });
+        return;
+    }
+    next();
+}
+
+// ──────────────────────────────
+// Auth: Register & Login
+// ──────────────────────────────
+
+// Register a new user
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            res.status(400).json({ success: false, error: 'email and password are required' });
+            return;
+        }
+        if (password.length < 6) {
+            res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
             return;
         }
 
-        // Check if user already has a role
-        const existing = await query('SELECT role FROM user_roles WHERE user_id = $1', [user_id]);
+        // Check if email already registered
+        const existing = await query('SELECT user_id FROM user_roles WHERE email = $1', [email.toLowerCase()]);
         if (existing.rows.length > 0) {
-            res.json({ success: true, data: { role: existing.rows[0].role } });
+            res.status(409).json({ success: false, error: 'Email already registered' });
             return;
         }
 
-        // First user becomes admin, everyone else gets 'user'
+        // First user becomes admin
         const countResult = await query('SELECT COUNT(*) as count FROM user_roles');
         const assignedRole = parseInt(countResult.rows[0].count) === 0 ? 'admin' : 'user';
 
-        const result = await query(
-            `INSERT INTO user_roles (user_id, email, role) VALUES ($1, $2, $3)
-             ON CONFLICT (user_id) DO NOTHING RETURNING *`,
-            [user_id, email, assignedRole]
+        const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const passwordHash = await bcrypt.hash(password, 10);
+
+        await query(
+            `INSERT INTO user_roles (user_id, email, password_hash, role) VALUES ($1, $2, $3, $4)`,
+            [userId, email.toLowerCase(), passwordHash, assignedRole]
         );
 
-        // If ON CONFLICT hit, fetch existing
-        if (result.rows.length === 0) {
-            const fallback = await query('SELECT role FROM user_roles WHERE user_id = $1', [user_id]);
-            res.json({ success: true, data: { role: fallback.rows[0]?.role || 'user' } });
-            return;
-        }
+        const token = generateToken({ user_id: userId, email: email.toLowerCase(), role: assignedRole as 'admin' | 'user' });
 
-        res.status(201).json({ success: true, data: { role: result.rows[0].role } });
+        res.status(201).json({
+            success: true,
+            data: { token, user_id: userId, email: email.toLowerCase(), role: assignedRole }
+        });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         res.status(500).json({ success: false, error: msg });
     }
 });
 
-// List all users with roles (admin only — caller should check role client-side)
-app.get('/api/auth/users', async (_req, res) => {
+// Login with email + password
+app.post('/api/auth/login', async (req, res) => {
     try {
-        const result = await query('SELECT * FROM user_roles ORDER BY created_at ASC');
+        const { email, password } = req.body;
+        if (!email || !password) {
+            res.status(400).json({ success: false, error: 'email and password are required' });
+            return;
+        }
+
+        const result = await query(
+            'SELECT user_id, email, password_hash, role FROM user_roles WHERE email = $1',
+            [email.toLowerCase()]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(401).json({ success: false, error: 'Invalid email or password' });
+            return;
+        }
+
+        const user = result.rows[0];
+        if (!user.password_hash) {
+            res.status(401).json({ success: false, error: 'Account was created via OAuth. Use Supabase login.' });
+            return;
+        }
+
+        const valid = await bcrypt.compare(password, user.password_hash);
+        if (!valid) {
+            res.status(401).json({ success: false, error: 'Invalid email or password' });
+            return;
+        }
+
+        const token = generateToken({ user_id: user.user_id, email: user.email, role: user.role });
+
+        res.json({
+            success: true,
+            data: { token, user_id: user.user_id, email: user.email, role: user.role }
+        });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// Get current user info (verify token)
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+    const user = (req as any).user as JwtPayload;
+    res.json({ success: true, data: user });
+});
+
+// List all users with roles (admin only)
+app.get('/api/auth/users', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+        const result = await query(
+            'SELECT id, user_id, email, role, created_at, updated_at FROM user_roles ORDER BY created_at ASC'
+        );
         res.json({ success: true, data: result.rows });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -98,8 +206,8 @@ app.get('/api/auth/users', async (_req, res) => {
     }
 });
 
-// Update user role (promote/demote)
-app.patch('/api/auth/users/:user_id', async (req, res) => {
+// Update user role (admin only)
+app.patch('/api/auth/users/:user_id', requireAuth, requireAdmin, async (req, res) => {
     try {
         const { role } = req.body;
         if (!role || !['admin', 'user'].includes(role)) {
@@ -108,7 +216,7 @@ app.patch('/api/auth/users/:user_id', async (req, res) => {
         }
 
         const result = await query(
-            'UPDATE user_roles SET role = $1, updated_at = NOW() WHERE user_id = $2 RETURNING *',
+            'UPDATE user_roles SET role = $1, updated_at = NOW() WHERE user_id = $2 RETURNING user_id, email, role',
             [role, req.params.user_id]
         );
 
@@ -128,7 +236,7 @@ app.patch('/api/auth/users/:user_id', async (req, res) => {
 // ──────────────────────────────
 
 // List members of a project
-app.get('/api/projects/:id/members', async (req, res) => {
+app.get('/api/projects/:id/members', requireAuth, async (req, res) => {
     try {
         const result = await query(
             'SELECT * FROM project_members WHERE project_id = $1 ORDER BY created_at ASC',
@@ -142,7 +250,7 @@ app.get('/api/projects/:id/members', async (req, res) => {
 });
 
 // Add member to project
-app.post('/api/projects/:id/members', async (req, res) => {
+app.post('/api/projects/:id/members', requireAuth, async (req, res) => {
     try {
         const { user_id, email, role } = req.body;
         if (!email) {
@@ -176,7 +284,7 @@ app.post('/api/projects/:id/members', async (req, res) => {
 });
 
 // Remove member from project
-app.delete('/api/projects/:id/members/:user_id', async (req, res) => {
+app.delete('/api/projects/:id/members/:user_id', requireAuth, async (req, res) => {
     try {
         const result = await query(
             'DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING id',
@@ -198,7 +306,7 @@ app.delete('/api/projects/:id/members/:user_id', async (req, res) => {
 // ──────────────────────────────
 
 // Create project
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', requireAuth, async (req, res) => {
     try {
         const { id, name, owner_id, owner_email } = req.body;
         if (!id) {
@@ -221,23 +329,30 @@ app.post('/api/projects', async (req, res) => {
     }
 });
 
-// List projects (supports owner_id, owner_email, or user_id for member access)
-app.get('/api/projects', async (req, res) => {
+// List projects — scoped by role
+app.get('/api/projects', requireAuth, async (req, res) => {
     try {
+        const authUser = (req as any).user as JwtPayload;
         const { owner_email, owner_id, user_id } = req.query;
         let sql = 'SELECT id, name, owner_id, owner_email, plan, created_at FROM projects';
         const params: any[] = [];
 
-        if (owner_id) {
-            sql += ' WHERE owner_id = $1';
-            params.push(owner_id);
-        } else if (owner_email) {
-            sql += ' WHERE owner_email = $1';
-            params.push(owner_email);
-        } else if (user_id) {
-            // Return projects where user is owner OR member
+        if (authUser.role === 'admin') {
+            // Admins can use any filter or see all
+            if (owner_id) {
+                sql += ' WHERE owner_id = $1';
+                params.push(owner_id);
+            } else if (owner_email) {
+                sql += ' WHERE owner_email = $1';
+                params.push(owner_email);
+            } else if (user_id) {
+                sql += ` WHERE owner_id = $1 OR id IN (SELECT project_id FROM project_members WHERE user_id = $1)`;
+                params.push(user_id);
+            }
+        } else {
+            // Regular users: always scoped to owned + member projects
             sql += ` WHERE owner_id = $1 OR id IN (SELECT project_id FROM project_members WHERE user_id = $1)`;
-            params.push(user_id);
+            params.push(authUser.user_id);
         }
         sql += ' ORDER BY created_at DESC';
 
@@ -250,7 +365,7 @@ app.get('/api/projects', async (req, res) => {
 });
 
 // Get single project
-app.get('/api/projects/:id', async (req, res) => {
+app.get('/api/projects/:id', requireAuth, async (req, res) => {
     try {
         const result = await query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
         if (result.rows.length === 0) {
@@ -265,7 +380,7 @@ app.get('/api/projects/:id', async (req, res) => {
 });
 
 // Update project
-app.patch('/api/projects/:id', async (req, res) => {
+app.patch('/api/projects/:id', requireAuth, async (req, res) => {
     try {
         const { name, plan, config } = req.body;
         const sets: string[] = [];
@@ -299,7 +414,7 @@ app.patch('/api/projects/:id', async (req, res) => {
 });
 
 // Delete project
-app.delete('/api/projects/:id', async (req, res) => {
+app.delete('/api/projects/:id', requireAuth, async (req, res) => {
     try {
         const result = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
         if (result.rows.length === 0) {
@@ -321,12 +436,14 @@ app.post('/api/feedback', async (req, res) => {
     try {
         const event = FeedbackSchema.parse(req.body);
 
-        // TODO: Re-enable project validation after testing
-        // const projectCheck = await query('SELECT id FROM projects WHERE id = $1', [event.project_id]);
-        // if (projectCheck.rows.length === 0) {
-        //     res.status(403).json({ success: false, error: `Unknown project: "${event.project_id}". Register it in the admin portal first.` });
-        //     return;
-        // }
+        // Auto-create project if it doesn't exist
+        const projectCheck = await query('SELECT id FROM projects WHERE id = $1', [event.project_id]);
+        if (projectCheck.rows.length === 0) {
+            await query(
+                'INSERT INTO projects (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+                [event.project_id, event.project_id]
+            );
+        }
 
         const text = `
       INSERT INTO feedback (
@@ -384,15 +501,38 @@ app.post('/api/feedback', async (req, res) => {
     }
 });
 
-// List feedback (with filters)
-app.get('/api/feedback', async (req, res) => {
+// Helper: get project IDs accessible to a user (owned + member)
+async function getUserProjectIds(userId: string): Promise<string[]> {
+    const result = await query(
+        `SELECT id FROM projects WHERE owner_id = $1
+         UNION
+         SELECT project_id FROM project_members WHERE user_id = $1`,
+        [userId]
+    );
+    return result.rows.map((r: any) => r.id || r.project_id);
+}
+
+// List feedback (with filters) — scoped by role
+app.get('/api/feedback', requireAuth, async (req, res) => {
     try {
+        const user = (req as any).user as JwtPayload;
         const { project_id, type, status, severity, limit = '50', offset = '0' } = req.query;
 
         let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, created_at FROM feedback';
         const conditions: string[] = [];
         const values: any[] = [];
         let paramIndex = 1;
+
+        // Non-admin users only see feedback for their projects
+        if (user.role !== 'admin') {
+            const projectIds = await getUserProjectIds(user.user_id);
+            if (projectIds.length === 0) {
+                res.json({ success: true, data: [], total: 0 });
+                return;
+            }
+            conditions.push(`project_id = ANY($${paramIndex++})`);
+            values.push(projectIds);
+        }
 
         if (project_id) { conditions.push(`project_id = $${paramIndex++}`); values.push(project_id); }
         if (type) { conditions.push(`type = $${paramIndex++}`); values.push(type); }
@@ -412,16 +552,40 @@ app.get('/api/feedback', async (req, res) => {
     }
 });
 
-// Get stats/analytics (MUST be before :id route)
-app.get('/api/feedback/stats/summary', async (req, res) => {
+// Get stats/analytics (MUST be before :id route) — scoped by role
+app.get('/api/feedback/stats/summary', requireAuth, async (req, res) => {
     try {
+        const user = (req as any).user as JwtPayload;
         const { project_id } = req.query;
-        const where = project_id ? 'WHERE project_id = $1' : '';
-        const params = project_id ? [project_id] : [];
+
+        const conditions: string[] = [];
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        // Non-admin users scoped to their projects
+        if (user.role !== 'admin') {
+            const projectIds = await getUserProjectIds(user.user_id);
+            if (projectIds.length === 0) {
+                res.json({ success: true, data: { total: 0, by_type: {}, by_severity: {} } });
+                return;
+            }
+            conditions.push(`project_id = ANY($${paramIndex++})`);
+            params.push(projectIds);
+        }
+
+        if (project_id) {
+            conditions.push(`project_id = $${paramIndex++}`);
+            params.push(project_id);
+        }
+
+        const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+        const sevWhere = conditions.length > 0
+            ? where + ' AND severity IS NOT NULL'
+            : 'WHERE severity IS NOT NULL';
 
         const total = await query(`SELECT COUNT(*) as count FROM feedback ${where}`, params);
         const byType = await query(`SELECT type, COUNT(*) as count FROM feedback ${where} GROUP BY type`, params);
-        const bySeverity = await query(`SELECT severity, COUNT(*) as count FROM feedback ${where} WHERE severity IS NOT NULL GROUP BY severity`, project_id ? [project_id] : []);
+        const bySeverity = await query(`SELECT severity, COUNT(*) as count FROM feedback ${sevWhere} GROUP BY severity`, params);
 
         res.json({
             success: true,
@@ -437,14 +601,25 @@ app.get('/api/feedback/stats/summary', async (req, res) => {
     }
 });
 
-// Get single feedback with full context
-app.get('/api/feedback/:id', async (req, res) => {
+// Get single feedback with full context — scoped by role
+app.get('/api/feedback/:id', requireAuth, async (req, res) => {
     try {
+        const user = (req as any).user as JwtPayload;
         const result = await query('SELECT * FROM feedback WHERE id = $1', [req.params.id]);
         if (result.rows.length === 0) {
             res.status(404).json({ success: false, error: 'Not found' });
             return;
         }
+
+        // Non-admin users can only view feedback from their projects
+        if (user.role !== 'admin') {
+            const projectIds = await getUserProjectIds(user.user_id);
+            if (!projectIds.includes(result.rows[0].project_id)) {
+                res.status(403).json({ success: false, error: 'Access denied' });
+                return;
+            }
+        }
+
         res.json({ success: true, data: result.rows[0] });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { fetchFeedbackStats, fetchUserProjectIds } from '../lib/feedbackApi';
+import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects } from '../lib/feedbackApi';
+import { useAuth } from '../hooks/useAuth';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 
@@ -29,26 +30,28 @@ export function StatsPage() {
     const [userProjects, setUserProjects] = useState<string[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
 
-    useEffect(() => {
-        (async () => {
-            const ids = await fetchUserProjectIds();
-            setUserProjects(ids);
-        })();
-    }, []);
+    const { isAdmin } = useAuth();
 
     useEffect(() => {
         (async () => {
             setLoading(true);
             setError('');
             try {
-                const data = await fetchFeedbackStats(selectedProject || undefined);
+                // Fetch projects and stats together
+                const [projectIds, data] = await Promise.all([
+                    isAdmin
+                        ? fetchProjects().then((p: any[]) => p.map((x: any) => x.id))
+                        : fetchUserProjectIds(),
+                    fetchFeedbackStats(selectedProject || undefined),
+                ]);
+                setUserProjects(projectIds);
                 setStats(data);
             } catch (err: any) {
                 setError(err.message || 'Failed to load stats');
             }
             setLoading(false);
         })();
-    }, [selectedProject]);
+    }, [selectedProject, isAdmin]);
 
     if (loading) {
         return (

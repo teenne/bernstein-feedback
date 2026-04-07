@@ -38,11 +38,20 @@ export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          const errorText = await response.text().catch(() => 'Unknown error');
-          return {
-            success: false,
-            error: `Server error: ${response.status} - ${errorText}`,
-          };
+          let errorMessage = `Server error: ${response.status}`;
+          try {
+            const errorJson = await response.json();
+            if (errorJson.error) {
+              errorMessage = errorJson.error;
+            }
+            if (errorJson.details?.length) {
+              errorMessage = errorJson.details.map((d: any) => d.message).join(', ');
+            }
+          } catch {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            errorMessage = `Server error: ${response.status} - ${errorText}`;
+          }
+          return { success: false, error: errorMessage };
         }
 
         const data = await response.json().catch(() => ({}));

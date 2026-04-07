@@ -317,6 +317,14 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       setSubmitError(null);
 
       try {
+        // Validate project_id before submitting
+        if (!config.projectId) {
+          const msg = 'No project selected. Please create or select a project before submitting feedback.';
+          setSubmitError(msg);
+          showToast({ type: 'error', message: msg });
+          return { success: false };
+        }
+
         // Build context based on consent toggles
         const fullContext = captureContext();
         const context = {

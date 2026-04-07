@@ -42,6 +42,11 @@ export default function AuthGateway({ onProjectSelect }: AuthGatewayProps = {}) 
         );
     }
 
+    // No Supabase — render Dashboard with local auth (no session needed)
+    if (!supabase) {
+        return <Dashboard onProjectSelect={onProjectSelect} />;
+    }
+
     if (!session) {
         return <LoginPage />;
     }

@@ -9,8 +9,14 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
 
+function getAuthHeaders(): Record<string, string> {
+    const token = sessionStorage.getItem('feedback_token');
+    if (token) return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
+}
+
 interface DashboardProps {
-    session: Session;
+    session?: Session | null;
     onProjectSelect?: (projectId: string) => void;
 }
 
@@ -41,7 +47,8 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
     const [addingMember, setAddingMember] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; variant: 'danger' | 'warning' | 'default'; confirmLabel: string; onConfirm: () => void } | null>(null);
 
-    const { isAdmin } = useAuth();
+    const auth = useAuth();
+    const { isAdmin } = auth;
 
     const {
         rawConfig,
@@ -53,8 +60,9 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
         fetchManagedConfig
     } = useFeedbackConfig(selectedProjectId || 'demo-app');
 
-    const userEmail = session.user.email || '';
-    const userId = session.user.id;
+    // Support both Supabase session and local auth
+    const userEmail = session?.user?.email || auth.email || '';
+    const userId = session?.user?.id || auth.userId || '';
 
     const handleSignOut = async () => {
         await supabase?.auth.signOut();
@@ -75,7 +83,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             } else {
                 // Node server: admin sees all, users see owned + member projects
                 const params = isAdmin ? '' : `?user_id=${encodeURIComponent(userId)}`;
-                const res = await fetch(`${API_URL}/api/projects${params}`);
+                const res = await fetch(`${API_URL}/api/projects${params}`, { headers: getAuthHeaders() });
                 const json = await res.json();
                 if (json.success) setProjects(json.data || []);
             }
@@ -108,7 +116,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     .order('created_at', { ascending: true });
                 if (!error) setMembers(data || []);
             } else {
-                const res = await fetch(`${API_URL}/api/projects/${projectId}/members`);
+                const res = await fetch(`${API_URL}/api/projects/${projectId}/members`, { headers: getAuthHeaders() });
                 const json = await res.json();
                 if (json.success) setMembers(json.data || []);
             }
@@ -147,7 +155,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             } else {
                 const res = await fetch(`${API_URL}/api/projects/${selectedProjectId}/members`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ email: memberEmail.trim().toLowerCase() }),
                 });
                 const json = await res.json();
@@ -177,7 +185,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     .eq('project_id', projectId)
                     .eq('user_id', memberUserId);
             } else {
-                await fetch(`${API_URL}/api/projects/${projectId}/members/${memberUserId}`, { method: 'DELETE' });
+                await fetch(`${API_URL}/api/projects/${projectId}/members/${memberUserId}`, { method: 'DELETE', headers: getAuthHeaders() });
             }
             fetchMembers(projectId);
         } catch { alert('Failed to connect to server'); }
@@ -218,7 +226,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             } else {
                 const res = await fetch(`${API_URL}/api/projects`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ id, name: createForm.name.trim() || id, owner_id: userId, owner_email: userEmail }),
                 });
                 const json = await res.json();
@@ -245,7 +253,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             } else {
                 const res = await fetch(`${API_URL}/api/projects/${projectId}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ plan }),
                 });
                 const json = await res.json();
@@ -274,7 +282,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                 if (selectedProjectId === projectId) setSelectedProjectId(null);
                 fetchProjects();
             } else {
-                const res = await fetch(`${API_URL}/api/projects/${projectId}`, { method: 'DELETE' });
+                const res = await fetch(`${API_URL}/api/projects/${projectId}`, { method: 'DELETE', headers: getAuthHeaders() });
                 const json = await res.json();
                 if (json.success) {
                     if (selectedProjectId === projectId) setSelectedProjectId(null);

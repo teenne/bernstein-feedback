@@ -31,6 +31,7 @@ export function FeedbackDetailPage() {
     const [item, setItem] = useState<FeedbackDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [lightbox, setLightbox] = useState<string | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -109,16 +110,44 @@ export function FeedbackDetailPage() {
                 <GlassCard title={`Screenshots (${screenshots.length})`}>
                     <div className="flex gap-3 flex-wrap">
                         {screenshots.map((src: string, i: number) => (
-                            <a key={i} href={src} target="_blank" rel="noopener noreferrer">
+                            <button key={i} onClick={() => setLightbox(src)} className="group relative">
                                 <img
                                     src={src}
                                     alt={`Screenshot ${i + 1}`}
-                                    className="h-32 rounded-lg border border-gray-200 dark:border-gray-700 object-cover hover:opacity-80 transition-opacity"
+                                    className="h-32 rounded-lg border border-gray-200 dark:border-gray-700 object-cover group-hover:opacity-80 transition-opacity cursor-zoom-in"
                                 />
-                            </a>
+                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <svg className="w-8 h-8 text-white drop-shadow-lg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607zM10.5 7.5v6m3-3h-6" />
+                                    </svg>
+                                </div>
+                            </button>
                         ))}
                     </div>
                 </GlassCard>
+            )}
+
+            {/* Lightbox Modal */}
+            {lightbox && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
+                    onClick={() => setLightbox(null)}
+                >
+                    <button
+                        onClick={() => setLightbox(null)}
+                        className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+                    >
+                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                    <img
+                        src={lightbox}
+                        alt="Screenshot preview"
+                        className="max-w-full max-h-[90vh] rounded-xl shadow-2xl object-contain"
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                </div>
             )}
 
             {consoleErrors.length > 0 && (

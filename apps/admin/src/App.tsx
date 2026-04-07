@@ -123,6 +123,10 @@ export default function App() {
         return consoleAdapter();
       case "local":
       default:
+        // Auto-use Supabase when keys are available, even if adapterId is 'local'
+        if (supabaseUrl && supabaseKey) {
+          return supabaseAdapter({ supabaseUrl, supabaseKey });
+        }
         return httpAdapter({ endpoint: `${apiUrl}/api/feedback` });
     }
   }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);

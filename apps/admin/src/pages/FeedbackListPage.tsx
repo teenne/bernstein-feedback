@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchFeedbackList, fetchUserProjectIds } from '../lib/feedbackApi';
+import { fetchFeedbackList, fetchUserProjectIds, fetchProjects } from '../lib/feedbackApi';
+import { useAuth } from '../hooks/useAuth';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 // GlassCard used for empty state and table wrapper
@@ -58,23 +59,32 @@ export function FeedbackListPage() {
     const typeFilter = searchParams.get('type') || '';
     const projectFilter = searchParams.get('project_id') || '';
 
-    useEffect(() => {
-        (async () => {
-            const ids = await fetchUserProjectIds();
-            setUserProjects(ids);
-        })();
-    }, []);
+    const { isAdmin } = useAuth();
 
     const fetchData = async () => {
         setLoading(true);
         setError('');
         try {
-            const data = await fetchFeedbackList({
-                type: typeFilter || undefined,
-                project_id: projectFilter || undefined,
-                limit: 100,
-            });
+            // Fetch projects and feedback together to avoid race conditions
+            const [projectIds, data] = await Promise.all([
+                isAdmin
+                    ? fetchProjects().then((p: any[]) => p.map((x: any) => x.id))
+                    : fetchUserProjectIds(),
+                fetchFeedbackList({
+                    type: typeFilter || undefined,
+                    project_id: projectFilter || undefined,
+                    limit: 100,
+                }),
+            ]);
+
             setItems(data);
+
+            // Merge project IDs from both sources
+            const all = new Set<string>(projectIds);
+            for (const d of data as FeedbackItem[]) {
+                if (d.project_id) all.add(d.project_id);
+            }
+            setUserProjects([...all]);
         } catch (err: any) {
             setError(err.message || 'Failed to load feedback');
         }

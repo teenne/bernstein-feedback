@@ -17,7 +17,7 @@ interface AuthState {
  * Auth hook that checks session and determines admin vs regular user.
  *
  * Role is determined by the `user_roles` table (dynamic, DB-driven).
- * Works with both Supabase direct and Node server fallback.
+ * Works with both Supabase direct and Node server (JWT) fallback.
  */
 export function useAuth(): AuthState {
     const [state, setState] = useState<AuthState>({
@@ -32,11 +32,44 @@ export function useAuth(): AuthState {
     const [sessionUser, setSessionUser] = useState<{ id: string; email: string } | null>(null);
     const roleResolved = useRef(false);
 
-    // Step 1: Listen for auth session (sync, no async DB calls here)
+    // Read local session from sessionStorage
+    const readLocalSession = () => {
+        const stored = sessionStorage.getItem('feedback_local_user');
+        const token = sessionStorage.getItem('feedback_token');
+        if (stored && token) {
+            try {
+                const { user_id, email, role } = JSON.parse(stored);
+                if (user_id && email && role) {
+                    roleResolved.current = true;
+                    setState({
+                        isLoggedIn: true,
+                        isAdmin: role === 'admin',
+                        role,
+                        email,
+                        userId: user_id,
+                        loading: false,
+                    });
+                    setSessionUser({ id: user_id, email });
+                    return;
+                }
+            } catch {}
+        }
+        setState(prev => ({ ...prev, loading: false }));
+    };
+
+    // Step 1: Listen for auth session
     useEffect(() => {
+        // Local session (Node server with JWT)
         if (!supabase) {
-            setState(prev => ({ ...prev, loading: false }));
-            return;
+            readLocalSession();
+
+            // Listen for login/logout events from LocalLoginPage
+            const handleAuthChange = () => {
+                roleResolved.current = false;
+                readLocalSession();
+            };
+            window.addEventListener('local-auth-change', handleAuthChange);
+            return () => window.removeEventListener('local-auth-change', handleAuthChange);
         }
 
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -68,7 +101,7 @@ export function useAuth(): AuthState {
         return () => subscription.unsubscribe();
     }, []);
 
-    // Step 2: Resolve role from DB (separate effect, no lock contention)
+    // Step 2: Resolve role from DB (Supabase path only — Node server resolves at login)
     useEffect(() => {
         if (!sessionUser || roleResolved.current) return;
 
@@ -110,18 +143,17 @@ export function useAuth(): AuthState {
                         role = (data.role as 'admin' | 'user') || 'user';
                     }
                 } else {
-                    // Node server fallback
-                    const res = await fetch(`${API_URL}/api/auth/role`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: userId, email }),
-                    });
-
-                    if (cancelled) return;
-
-                    const json = await res.json();
-                    if (json.success) {
-                        role = json.data.role || 'user';
+                    // Node server: verify token with /api/auth/me
+                    const token = sessionStorage.getItem('feedback_token');
+                    if (token) {
+                        const res = await fetch(`${API_URL}/api/auth/me`, {
+                            headers: { 'Authorization': `Bearer ${token}` },
+                        });
+                        if (cancelled) return;
+                        const json = await res.json();
+                        if (json.success) {
+                            role = json.data.role || 'user';
+                        }
                     }
                 }
             } catch (err) {

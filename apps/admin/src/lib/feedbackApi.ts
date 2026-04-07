@@ -6,13 +6,40 @@ const hasSupabase = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE
 // Use Supabase directly if configured, otherwise fall back to Node server
 export const useSupabaseDirectly = hasSupabase && !!supabase;
 
+// Helper: get auth headers for Node server requests
+function getAuthHeaders(): Record<string, string> {
+    const token = sessionStorage.getItem('feedback_token');
+    if (token) {
+        return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    }
+    return { 'Content-Type': 'application/json' };
+}
+
 // Helper: get current user ID for Node server path
 async function getCurrentUserId(): Promise<string | null> {
     if (supabase) {
         const { data: { session } } = await supabase.auth.getSession();
         return session?.user?.id || null;
     }
+    // Local session fallback
+    const stored = sessionStorage.getItem('feedback_local_user');
+    if (stored) {
+        try {
+            return JSON.parse(stored).user_id || null;
+        } catch {}
+    }
     return null;
+}
+
+// Helper: authenticated fetch for Node server
+async function apiFetch(url: string, options?: RequestInit): Promise<any> {
+    const res = await fetch(url, {
+        ...options,
+        headers: { ...getAuthHeaders(), ...options?.headers },
+    });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error);
+    return json;
 }
 
 export async function fetchFeedbackList(filters: { type?: string; project_id?: string; limit?: number }) {
@@ -31,15 +58,12 @@ export async function fetchFeedbackList(filters: { type?: string; project_id?: s
         return data || [];
     }
 
-    // Fallback: Node server
     const params = new URLSearchParams();
     if (filters.type) params.set('type', filters.type);
     if (filters.project_id) params.set('project_id', filters.project_id);
     params.set('limit', String(filters.limit || 100));
 
-    const res = await fetch(`${API_URL}/api/feedback?${params}`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiFetch(`${API_URL}/api/feedback?${params}`);
     return json.data;
 }
 
@@ -55,9 +79,7 @@ export async function fetchFeedbackById(id: string) {
         return data;
     }
 
-    const res = await fetch(`${API_URL}/api/feedback/${id}`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiFetch(`${API_URL}/api/feedback/${id}`);
     const data = json.data;
     // Parse JSON strings from Node server
     if (typeof data.context === 'string') data.context = JSON.parse(data.context);
@@ -100,15 +122,12 @@ export async function fetchFeedbackStats(project_id?: string) {
     }
 
     const params = project_id ? `?project_id=${project_id}` : '';
-    const res = await fetch(`${API_URL}/api/feedback/stats/summary${params}`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiFetch(`${API_URL}/api/feedback/stats/summary${params}`);
     return json.data;
 }
 
 export async function fetchProjects(ownerEmail?: string) {
     if (useSupabaseDirectly) {
-        // RLS handles access: admins see all projects, users see only their own
         const { data, error } = await supabase!
             .from('projects')
             .select('*')
@@ -118,27 +137,43 @@ export async function fetchProjects(ownerEmail?: string) {
     }
 
     const params = ownerEmail ? `?owner_email=${encodeURIComponent(ownerEmail)}` : '';
-    const res = await fetch(`${API_URL}/api/projects${params}`);
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
+    const json = await apiFetch(`${API_URL}/api/projects${params}`);
+    return json.data;
+}
+
+export async function createProject(project: { id: string; name: string; owner_id: string; owner_email: string }) {
+    if (useSupabaseDirectly) {
+        const { data, error } = await supabase!
+            .from('projects')
+            .insert(project)
+            .select()
+            .single();
+        if (error) throw new Error(error.message);
+        return data;
+    }
+
+    const json = await apiFetch(`${API_URL}/api/projects`, {
+        method: 'POST',
+        body: JSON.stringify(project),
+    });
     return json.data;
 }
 
 export async function fetchUserProjectIds(): Promise<string[]> {
     if (useSupabaseDirectly) {
-        // RLS returns only projects the current user can access
         const { data } = await supabase!
             .from('projects')
             .select('id');
         return (data || []).map((p: any) => p.id);
     }
 
-    // Node server fallback: use user_id to get owned + member projects
     const userId = await getCurrentUserId();
     if (!userId) return [];
 
-    const res = await fetch(`${API_URL}/api/projects?user_id=${encodeURIComponent(userId)}`);
-    const json = await res.json();
-    if (!json.success) return [];
-    return (json.data || []).map((p: any) => p.id);
+    try {
+        const json = await apiFetch(`${API_URL}/api/projects?user_id=${encodeURIComponent(userId)}`);
+        return (json.data || []).map((p: any) => p.id);
+    } catch {
+        return [];
+    }
 }

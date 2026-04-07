@@ -17,7 +17,7 @@ import "akk-feedback/styles.css";
 import { useFeedbackConfig } from "./hooks/useFeedbackConfig";
 import { useAuth } from "./hooks/useAuth";
 import { supabase } from "./lib/supabaseClient";
-import { fetchUserProjectIds } from "./lib/feedbackApi";
+import { fetchUserProjectIds, fetchProjects, createProject } from "./lib/feedbackApi";
 
 // Lazy loaded pages
 const FeedbackListPage = lazy(() =>
@@ -75,17 +75,32 @@ export default function App() {
     hasUnsavedChanges,
   } = useFeedbackConfig(activeProjectId);
 
-  // Load user's accessible projects
+  // Load user's accessible projects — auto-create default if none exist
+  // Load projects once on login
   useEffect(() => {
     if (!auth.isLoggedIn) return;
     (async () => {
       try {
-        const ids = await fetchUserProjectIds();
-        setUserProjectIds(ids);
-        if (ids.length > 0) setActiveProjectId(ids[0]);
+        const ids = auth.isAdmin
+          ? (await fetchProjects()).map((p: any) => p.id)
+          : await fetchUserProjectIds();
+        if (ids.length > 0) {
+          setUserProjectIds(ids);
+          if (!activeProjectId) setActiveProjectId(ids[0]);
+        } else if (auth.isAdmin && auth.userId && auth.email) {
+          const defaultId = 'feedback-admin';
+          await createProject({
+            id: defaultId,
+            name: 'Feedback Admin',
+            owner_id: auth.userId,
+            owner_email: auth.email,
+          });
+          setUserProjectIds([defaultId]);
+          setActiveProjectId(defaultId);
+        }
       } catch {}
     })();
-  }, [auth.isLoggedIn]);
+  }, [auth.isLoggedIn, auth.isAdmin, auth.userId, auth.email]);
 
   // Build adapter based on raw settings
   // Auto-use Supabase adapter when Supabase env vars are configured
@@ -143,6 +158,9 @@ export default function App() {
 
   const handleSignOut = () => {
     sessionStorage.removeItem("feedback_admin_auth");
+    sessionStorage.removeItem("feedback_local_user");
+    sessionStorage.removeItem("feedback_token");
+    window.dispatchEvent(new Event('local-auth-change'));
     setLocalAuthed(false);
     if (hasSupabase) {
       supabase?.auth.signOut();

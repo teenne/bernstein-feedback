@@ -33,3 +33,4 @@ coverage/
 # Claude Code local settings
 .claude/settings.local.json
 .test-Results/
+.server/package-lock.json

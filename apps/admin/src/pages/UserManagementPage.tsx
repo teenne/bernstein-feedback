@@ -8,6 +8,12 @@ import { useAuth } from '../hooks/useAuth';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
 
+function getAuthHeaders(): Record<string, string> {
+    const token = sessionStorage.getItem('feedback_token');
+    if (token) return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
+}
+
 interface UserRole {
     id: string;
     user_id: string;
@@ -35,7 +41,7 @@ export default function UserManagementPage() {
                 if (error) throw error;
                 setUsers(data || []);
             } else {
-                const res = await fetch(`${API_URL}/api/auth/users`);
+                const res = await fetch(`${API_URL}/api/auth/users`, { headers: getAuthHeaders() });
                 const json = await res.json();
                 if (json.success) setUsers(json.data || []);
             }
@@ -78,7 +84,7 @@ export default function UserManagementPage() {
             } else {
                 const res = await fetch(`${API_URL}/api/auth/users/${user.user_id}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ role: newRole }),
                 });
                 const json = await res.json();
@@ -135,7 +141,7 @@ export default function UserManagementPage() {
 
                                 return (
                                     <div
-                                        key={user.id}
+                                        key={user.user_id}
                                         className="flex items-center justify-between py-4 first:pt-0 last:pb-0"
                                     >
                                         <div className="flex items-center gap-3 min-w-0">

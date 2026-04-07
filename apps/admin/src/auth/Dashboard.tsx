@@ -45,6 +45,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
     const [members, setMembers] = useState<{ id: string; user_id: string; email: string; role: string; created_at: string }[]>([]);
     const [memberEmail, setMemberEmail] = useState('');
     const [addingMember, setAddingMember] = useState(false);
+    const [addMemberError, setAddMemberError] = useState('');
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; variant: 'danger' | 'warning' | 'default'; confirmLabel: string; onConfirm: () => void } | null>(null);
 
     const auth = useAuth();
@@ -128,6 +129,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
     const handleAddMember = async () => {
         if (!selectedProjectId || !memberEmail.trim()) return;
         setAddingMember(true);
+        setAddMemberError('');
         try {
             if (useSupabaseDirectly) {
                 // Look up user_id from user_roles by email
@@ -138,7 +140,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     .maybeSingle();
 
                 if (!userRow) {
-                    alert(`No user found with email: ${memberEmail.trim()}`);
+                    setAddMemberError(`No user found with email: ${memberEmail.trim()}`);
                     setAddingMember(false);
                     return;
                 }
@@ -150,8 +152,8 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     role: 'member',
                 }, { onConflict: 'project_id,user_id' });
 
-                if (error) alert('Error: ' + error.message);
-                else { setMemberEmail(''); fetchMembers(selectedProjectId); }
+                if (error) setAddMemberError(error.message);
+                else { setMemberEmail(''); setAddMemberError(''); fetchMembers(selectedProjectId); }
             } else {
                 const res = await fetch(`${API_URL}/api/projects/${selectedProjectId}/members`, {
                     method: 'POST',
@@ -159,10 +161,10 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     body: JSON.stringify({ email: memberEmail.trim().toLowerCase() }),
                 });
                 const json = await res.json();
-                if (!json.success) alert('Error: ' + json.error);
-                else { setMemberEmail(''); fetchMembers(selectedProjectId); }
+                if (!json.success) setAddMemberError(json.error || 'Failed to add member');
+                else { setMemberEmail(''); setAddMemberError(''); fetchMembers(selectedProjectId); }
             }
-        } catch { alert('Failed to connect to server'); }
+        } catch { setAddMemberError('Failed to connect to server'); }
         setAddingMember(false);
     };
 
@@ -395,14 +397,14 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-3">Team Members</h3>
 
                                 {/* Add member */}
-                                <div className="flex gap-2 mb-4">
+                                <div className="flex gap-2 mb-2">
                                     <input
                                         type="email"
                                         value={memberEmail}
-                                        onChange={(e) => setMemberEmail(e.target.value)}
+                                        onChange={(e) => { setMemberEmail(e.target.value); setAddMemberError(''); }}
                                         onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
                                         placeholder="Enter email to add member..."
-                                        className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                                        className={`flex-1 px-3 py-1.5 text-sm rounded-lg border ${addMemberError ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none`}
                                     />
                                     <button
                                         onClick={handleAddMember}
@@ -412,6 +414,12 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                         {addingMember ? '...' : 'Add'}
                                     </button>
                                 </div>
+                                {addMemberError && (
+                                    <div className="mb-4 flex items-center gap-2 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-sm px-3 py-2 rounded-lg">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                                        {addMemberError}
+                                    </div>
+                                )}
 
                                 {/* Member list */}
                                 {members.length === 0 ? (

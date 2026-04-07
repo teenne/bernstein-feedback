@@ -90,10 +90,20 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     const file = e.target.files?.[0];
     if (file) {
       setUploadError('');
-      if (file.size > 5 * 1024 * 1024) {
-        setUploadError('File too large. Maximum size is 5MB.');
+
+      // Only allow image files
+      if (!file.type.startsWith('image/')) {
+        setUploadError('Only image files are allowed (PNG, JPG, GIF, WebP).');
+        e.target.value = '';
         return;
       }
+
+      if (file.size > 5 * 1024 * 1024) {
+        setUploadError('File too large. Maximum size is 5MB.');
+        e.target.value = '';
+        return;
+      }
+
       const reader = new FileReader();
       reader.onload = (event) => {
         setFormState(prev => ({

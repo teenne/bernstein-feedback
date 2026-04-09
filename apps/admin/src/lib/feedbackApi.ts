@@ -1,19 +1,8 @@
 import { supabase } from './supabaseClient';
+import { API_URL, useSupabaseDirectly, apiFetch, SESSION_KEYS } from './config';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const hasSupabase = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
-
-// Use Supabase directly if configured, otherwise fall back to Node server
-export const useSupabaseDirectly = hasSupabase && !!supabase;
-
-// Helper: get auth headers for Node server requests
-function getAuthHeaders(): Record<string, string> {
-    const token = sessionStorage.getItem('feedback_token');
-    if (token) {
-        return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-    }
-    return { 'Content-Type': 'application/json' };
-}
+// Re-export for existing consumers
+export { useSupabaseDirectly };
 
 // Helper: get current user ID for Node server path
 async function getCurrentUserId(): Promise<string | null> {
@@ -21,8 +10,7 @@ async function getCurrentUserId(): Promise<string | null> {
         const { data: { session } } = await supabase.auth.getSession();
         return session?.user?.id || null;
     }
-    // Local session fallback
-    const stored = sessionStorage.getItem('feedback_local_user');
+    const stored = sessionStorage.getItem(SESSION_KEYS.LOCAL_USER);
     if (stored) {
         try {
             return JSON.parse(stored).user_id || null;
@@ -31,27 +19,17 @@ async function getCurrentUserId(): Promise<string | null> {
     return null;
 }
 
-// Helper: authenticated fetch for Node server
-async function apiFetch(url: string, options?: RequestInit): Promise<any> {
-    const res = await fetch(url, {
-        ...options,
-        headers: { ...getAuthHeaders(), ...options?.headers },
-    });
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error);
-    return json;
-}
-
-export async function fetchFeedbackList(filters: { type?: string; project_id?: string; limit?: number }) {
+export async function fetchFeedbackList(filters: { type?: string; project_id?: string; status?: string; limit?: number }) {
     if (useSupabaseDirectly) {
         let query = supabase!
             .from('feedback')
-            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, created_at')
+            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, created_at')
             .order('created_at', { ascending: false })
             .limit(filters.limit || 100);
 
         if (filters.type) query = query.eq('type', filters.type);
         if (filters.project_id) query = query.eq('project_id', filters.project_id);
+        if (filters.status) query = query.eq('status', filters.status);
 
         const { data, error } = await query;
         if (error) throw new Error(error.message);
@@ -61,6 +39,7 @@ export async function fetchFeedbackList(filters: { type?: string; project_id?: s
     const params = new URLSearchParams();
     if (filters.type) params.set('type', filters.type);
     if (filters.project_id) params.set('project_id', filters.project_id);
+    if (filters.status) params.set('status', filters.status);
     params.set('limit', String(filters.limit || 100));
 
     const json = await apiFetch(`${API_URL}/api/feedback?${params}`);
@@ -157,6 +136,114 @@ export async function createProject(project: { id: string; name: string; owner_i
         body: JSON.stringify(project),
     });
     return json.data;
+}
+
+export async function updateFeedbackStatus(id: string, status: string, resolutionNote?: string) {
+    if (useSupabaseDirectly) {
+        const updates: any = { status };
+        if (status === 'resolved' || status === 'closed') {
+            updates.resolved_at = new Date().toISOString();
+        } else {
+            updates.resolved_at = null;
+            updates.resolved_by = null;
+        }
+        if (resolutionNote !== undefined) updates.resolution_note = resolutionNote;
+
+        const { data, error } = await supabase!
+            .from('feedback')
+            .update(updates)
+            .eq('id', id)
+            .select('id, project_id, title, status, user_id, resolved_at')
+            .single();
+
+        if (error) throw new Error(error.message);
+
+        // Create notification for the end user if resolving
+        if ((status === 'resolved' || status === 'closed') && data?.user_id) {
+            await supabase!
+                .from('notifications')
+                .insert({
+                    project_id: data.project_id,
+                    feedback_id: data.id,
+                    user_id: data.user_id,
+                    type: 'resolved',
+                    title: `Your feedback "${data.title}" has been resolved`,
+                    message: resolutionNote || null,
+                });
+        }
+
+        return data;
+    }
+
+    const json = await apiFetch(`${API_URL}/api/feedback/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, resolution_note: resolutionNote }),
+    });
+    return json.data;
+}
+
+export async function fetchProjectUsage(projectId: string) {
+    // Supabase-first: query tables directly when configured
+    if (useSupabaseDirectly) {
+        const month = new Date().toISOString().slice(0, 7);
+        const { data: project } = await supabase!
+            .from('projects')
+            .select('plan, plan_limits')
+            .eq('id', projectId)
+            .single();
+
+        const { data: usage } = await supabase!
+            .from('project_usage')
+            .select('month, ticket_count')
+            .eq('project_id', projectId)
+            .order('month', { ascending: false })
+            .limit(6);
+
+        const planLimits = (project?.plan_limits as Record<string, number> | null) || { max_tickets_per_month: 50 };
+        const currentUsage = (usage || []).find((u: any) => u.month === month);
+        const ticketsUsed = currentUsage?.ticket_count || 0;
+        const maxTickets = planLimits.max_tickets_per_month ?? 50;
+
+        return {
+            plan: project?.plan || 'free',
+            tickets_used: ticketsUsed,
+            tickets_limit: maxTickets,
+            percentage_used: maxTickets > 0 ? Math.round((ticketsUsed / maxTickets) * 100) : 0,
+            month,
+            history: usage || [],
+        };
+    }
+
+    // Node server fallback
+    try {
+        const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/usage`);
+        return json.data;
+    } catch {
+        // Neither available — return defaults
+        return { plan: 'free', tickets_used: 0, tickets_limit: 50, percentage_used: 0, month: new Date().toISOString().slice(0, 7), history: [] };
+    }
+}
+
+export async function fetchPlans() {
+    // Try Node server
+    try {
+        const json = await apiFetch(`${API_URL}/api/plans`);
+        return json.data;
+    } catch {
+        // Supabase fallback
+    }
+
+    if (useSupabaseDirectly) {
+        const { data, error } = await supabase!
+            .from('plans')
+            .select('*')
+            .eq('is_active', true)
+            .order('display_order', { ascending: true });
+        if (error) throw new Error(error.message);
+        return data || [];
+    }
+
+    return [];
 }
 
 export async function fetchUserProjectIds(): Promise<string[]> {

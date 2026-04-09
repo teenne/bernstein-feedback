@@ -1,33 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
+import { API_URL, useSupabaseDirectly, getAuthHeaders } from '../lib/config';
 import { SettingsPage } from '../pages/SettingsPage';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
 import { useAuth } from '../hooks/useAuth';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
-
-function getAuthHeaders(): Record<string, string> {
-    const token = sessionStorage.getItem('feedback_token');
-    if (token) return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-    return { 'Content-Type': 'application/json' };
-}
+import type { Project } from '../lib/types';
 
 interface DashboardProps {
     session?: Session | null;
     onProjectSelect?: (projectId: string) => void;
-}
-
-interface Project {
-    id: string;
-    name: string;
-    owner_id: string;
-    owner_email: string;
-    plan: 'free' | 'pro';
-    config?: any;
-    created_at: string;
 }
 
 export default function Dashboard({ session, onProjectSelect }: DashboardProps) {
@@ -39,6 +22,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
         if (id && onProjectSelect) onProjectSelect(id);
     };
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [showUpgradeModal, setShowUpgradeModal] = useState(false);
     const [createForm, setCreateForm] = useState({ id: '', name: '', description: '' });
     const [createError, setCreateError] = useState('');
     const [creating, setCreating] = useState(false);
@@ -233,7 +217,12 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                 });
                 const json = await res.json();
                 if (!json.success) {
-                    setCreateError(json.error || 'Failed to create project');
+                    if (json.error?.includes('Upgrade') || json.error?.includes('plan allows')) {
+                        setShowCreateModal(false);
+                        setShowUpgradeModal(true);
+                    } else {
+                        setCreateError(json.error || 'Failed to create project');
+                    }
                 } else {
                     setShowCreateModal(false);
                     fetchProjects();
@@ -619,6 +608,52 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Upgrade Plan Modal */}
+            {showUpgradeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center">
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowUpgradeModal(false)} />
+                    <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8">
+                        <button
+                            onClick={() => setShowUpgradeModal(false)}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                        >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                        <div className="text-center">
+                            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-4">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                                </svg>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Project limit reached</h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                                Your current plan allows 1 project. Upgrade to create more projects with higher ticket limits.
+                            </p>
+                            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 mb-6 text-left space-y-2">
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> Up to 10 projects (Pro) or 50 (Team)
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> 5,000 - 25,000 tickets/month
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> AI clustering, PostHog, API access
+                                </div>
+                            </div>
+                            <a
+                                href="mailto:support@bernstein.ai?subject=Upgrade Plan&body=Hi, I'd like to upgrade my plan to create more projects."
+                                className="block w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg transition-all text-center"
+                            >
+                                Contact Us to Upgrade
+                            </a>
+                            <p className="text-xs text-gray-400 mt-3">We'll get back to you within 24 hours.</p>
+                        </div>
                     </div>
                 </div>
             )}

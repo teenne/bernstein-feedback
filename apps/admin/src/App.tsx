@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
-import { Routes, Route, NavLink, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import {
   FeedbackProvider,
   FeedbackButton,
@@ -17,7 +17,13 @@ import "akk-feedback/styles.css";
 import { useFeedbackConfig } from "./hooks/useFeedbackConfig";
 import { useAuth } from "./hooks/useAuth";
 import { supabase } from "./lib/supabaseClient";
-import { fetchUserProjectIds, fetchProjects, createProject } from "./lib/feedbackApi";
+import { SESSION_KEYS } from "./lib/config";
+import { Header } from "./components/Header";
+import {
+  fetchUserProjectIds,
+  fetchProjects,
+  createProject,
+} from "./lib/feedbackApi";
 
 // Lazy loaded pages
 const FeedbackListPage = lazy(() =>
@@ -43,6 +49,7 @@ const SettingsPage = lazy(() =>
 // Lazy loaded auth
 const AuthGateway = lazy(() => import("./auth/AuthGateway"));
 const LocalLoginPage = lazy(() => import("./auth/LocalLoginPage"));
+const PlanSelectionPage = lazy(() => import("./auth/PlanSelectionPage"));
 const UserManagementPage = lazy(() => import("./pages/UserManagementPage"));
 
 const hasSupabase = !!(
@@ -60,10 +67,12 @@ function PageLoader() {
 
 export default function App() {
   const [localAuthed, setLocalAuthed] = useState(
-    () => sessionStorage.getItem("feedback_admin_auth") === "true",
+    () => sessionStorage.getItem(SESSION_KEYS.AUTH) === "true",
   );
   const [activeProjectId, setActiveProjectId] = useState<string>("");
   const [userProjectIds, setUserProjectIds] = useState<string[]>([]);
+  const [showPlanSelection, setShowPlanSelection] = useState(false);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const auth = useAuth();
   const {
     config,
@@ -75,8 +84,7 @@ export default function App() {
     hasUnsavedChanges,
   } = useFeedbackConfig(activeProjectId);
 
-  // Load user's accessible projects — auto-create default if none exist
-  // Load projects once on login
+  // Load user's accessible projects — show plan selection if none exist (new user)
   useEffect(() => {
     if (!auth.isLoggedIn) return;
     (async () => {
@@ -87,20 +95,28 @@ export default function App() {
         if (ids.length > 0) {
           setUserProjectIds(ids);
           if (!activeProjectId) setActiveProjectId(ids[0]);
-        } else if (auth.isAdmin && auth.userId && auth.email) {
-          const defaultId = 'feedback-admin';
-          await createProject({
-            id: defaultId,
-            name: 'Feedback Admin',
-            owner_id: auth.userId,
-            owner_email: auth.email,
-          });
-          setUserProjectIds([defaultId]);
-          setActiveProjectId(defaultId);
+          setShowPlanSelection(false);
+        } else if (auth.isAdmin) {
+          // Admin with no projects (first registration) — show plan selection
+          setShowPlanSelection(true);
+        } else {
+          // Regular user with no projects — wait to be assigned
+          setShowPlanSelection(false);
         }
       } catch {}
+      setProjectsLoaded(true);
     })();
   }, [auth.isLoggedIn, auth.isAdmin, auth.userId, auth.email]);
+
+  // Handle plan selection — just save the chosen plan, don't create project
+  // Developer creates project manually from Admin Portal
+  const [selectedPlan, setSelectedPlan] = useState<string>("free");
+
+  const handlePlanSelected = (planId: string) => {
+    setSelectedPlan(planId);
+    sessionStorage.setItem(SESSION_KEYS.SELECTED_PLAN, planId);
+    setShowPlanSelection(false);
+  };
 
   // Build adapter based on raw settings
   // Auto-use Supabase adapter when Supabase env vars are configured
@@ -131,18 +147,35 @@ export default function App() {
     }
   }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);
 
+  // Hooks must be called before any early return
+  const location = useLocation();
+  const isAdminPortal = location.pathname === "/admin";
+
   // Auth gate
   const isAuthenticated = hasSupabase ? auth.isLoggedIn : localAuthed;
 
   if (!isAuthenticated) {
     return (
-      <Suspense fallback={<PageLoader />}>
-        {hasSupabase ? (
-          <AuthGateway />
-        ) : (
-          <LocalLoginPage onLogin={() => setLocalAuthed(true)} />
-        )}
-      </Suspense>
+      <FeedbackErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          {hasSupabase ? (
+            <AuthGateway />
+          ) : (
+            <LocalLoginPage onLogin={() => setLocalAuthed(true)} />
+          )}
+        </Suspense>
+      </FeedbackErrorBoundary>
+    );
+  }
+
+  // Plan selection gate — show after registration when no projects exist
+  if (showPlanSelection && projectsLoaded) {
+    return (
+      <FeedbackErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          <PlanSelectionPage onSelect={handlePlanSelected} />
+        </Suspense>
+      </FeedbackErrorBoundary>
     );
   }
 
@@ -161,10 +194,10 @@ export default function App() {
   ];
 
   const handleSignOut = () => {
-    sessionStorage.removeItem("feedback_admin_auth");
-    sessionStorage.removeItem("feedback_local_user");
-    sessionStorage.removeItem("feedback_token");
-    window.dispatchEvent(new Event('local-auth-change'));
+    sessionStorage.removeItem(SESSION_KEYS.AUTH);
+    sessionStorage.removeItem(SESSION_KEYS.LOCAL_USER);
+    sessionStorage.removeItem(SESSION_KEYS.TOKEN);
+    window.dispatchEvent(new Event("local-auth-change"));
     setLocalAuthed(false);
     if (hasSupabase) {
       supabase?.auth.signOut();
@@ -178,59 +211,21 @@ export default function App() {
           ...config,
           projectId: activeProjectId,
           adapter: feedbackAdapter,
+          userId: auth.userId || undefined,
+          userEmail: auth.email || undefined,
         }}
       >
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
-          {/* Header */}
-          <header className="sticky top-0 z-50 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-            <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-              <span className="text-lg font-bold tracking-tight">
-                Feedback Admin
-              </span>
-              <div className="flex items-center gap-3">
-                <nav className="flex items-center gap-1">
-                  {navItems.map(({ to, label }) => (
-                    <NavLink
-                      key={to}
-                      to={to}
-                      className={({ isActive }) =>
-                        `px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${isActive ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100" : "text-gray-500 hover:text-gray-900 dark:hover:text-gray-100"}`
-                      }
-                    >
-                      {label}
-                    </NavLink>
-                  ))}
-                </nav>
-                {userProjectIds.length > 1 && (
-                  <select
-                    value={activeProjectId}
-                    onChange={(e) => setActiveProjectId(e.target.value)}
-                    className="px-2 py-1 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300"
-                  >
-                    {userProjectIds.map((id) => (
-                      <option key={id} value={id}>
-                        {id}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <div className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-gray-700">
-                  <span
-                    className={`w-2 h-2 rounded-full ${auth.isAdmin ? "bg-amber-500" : "bg-green-500"}`}
-                  />
-                  <span className="text-xs text-gray-500 hidden md:inline">
-                    {auth.isAdmin ? "Admin" : auth.email || "Local"}
-                  </span>
-                  <button
-                    onClick={handleSignOut}
-                    className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-1"
-                  >
-                    Sign out
-                  </button>
-                </div>
-              </div>
-            </div>
-          </header>
+          <Header
+            navItems={navItems}
+            projectIds={userProjectIds}
+            activeProjectId={activeProjectId}
+            onProjectChange={setActiveProjectId}
+            showProjectDropdown={!isAdminPortal}
+            isAdmin={auth.isAdmin}
+            email={auth.email}
+            onSignOut={handleSignOut}
+          />
 
           {/* Routes — lazy loaded with Suspense */}
           <main className="flex-1 overflow-auto">

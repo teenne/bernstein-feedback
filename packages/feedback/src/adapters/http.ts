@@ -14,10 +14,13 @@ export interface HttpAdapterOptions {
 /**
  * HTTP adapter for sending feedback to a REST endpoint
  */
-export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter {
+export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter & { endpoint: string } {
   const { endpoint, headers = {}, timeout = 10000, transform } = options;
 
   return {
+    /** The endpoint URL (used by widget to derive plan-status/notification URLs) */
+    endpoint,
+
     async submit(event: FeedbackEvent) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);

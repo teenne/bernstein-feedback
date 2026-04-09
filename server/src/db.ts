@@ -103,15 +103,15 @@ const executeMockQuery = async (
   return { rows: [], rowCount: 0, command: "UNKNOWN", oid: 0, fields: [] };
 };
 
-// Unified Query Interface
-export const query = async (
+// Unified Query Interface (generic T gives typed rows)
+export const query = async <T extends Record<string, any> = any>(
   text: string,
   params?: any[],
-): Promise<QueryResult> => {
+): Promise<QueryResult<T>> => {
   if (useInMemory) {
-    return executeMockQuery(text, params);
+    return executeMockQuery(text, params) as Promise<QueryResult<T>>;
   }
-  return pool.query(text, params);
+  return pool.query<T>(text, params);
 };
 
 export default pool;

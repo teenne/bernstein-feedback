@@ -15,7 +15,10 @@ import type {
   ConsoleError,
   NetworkError,
   Breadcrumb,
+  PlanStatus,
+  Notification,
 } from './schemas';
+import { useNotifications } from './hooks/useNotifications';
 import { redactSecrets, redactUrl, getElementDescriptor } from './utils/redact';
 
 interface HighlightedElement {
@@ -51,6 +54,22 @@ interface FeedbackContextValue {
   /** Update screen identity for navigation tracking */
   setScreen: (screen: { screenId?: string; pageName?: string }) => void;
   initialFormState: Partial<FeedbackFormState>;
+  /** Plan status from the server */
+  planStatus: PlanStatus | null;
+  /** Whether the project has reached its monthly ticket limit */
+  isLimitReached: boolean;
+  /** Notifications for the current user */
+  notifications: Notification[];
+  /** Number of unread notifications */
+  unreadCount: number;
+  /** Mark a single notification as read */
+  markNotificationRead: (id: string) => void;
+  /** Mark all notifications as read */
+  markAllNotificationsRead: () => void;
+  /** Whether to show notifications view instead of form */
+  showNotifications: boolean;
+  /** Toggle notifications view */
+  setShowNotifications: (show: boolean) => void;
 }
 
 const FeedbackContext = createContext<FeedbackContextValue | null>(null);
@@ -84,6 +103,14 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [initialFormState, setInitialFormState] = useState<Partial<FeedbackFormState>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Plan status polling
+  const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null);
+  const [isLimitReached, setIsLimitReached] = useState(false);
+
+  // Notifications
+  const { notifications, unreadCount, markAsRead: markNotificationRead, markAllRead: markAllNotificationsRead } = useNotifications(config);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // Dynamic screen identity state
   const [screenIdentity, setScreenIdentity] = useState<{ screenId?: string; pageName?: string }>({
@@ -208,6 +235,70 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     return () => window.removeEventListener('popstate', handleNavigation);
   }, [maxBreadcrumbs]);
 
+  // Plan status polling — check on mount, when dialog opens, and every 5 minutes
+  // Supports both HTTP (server endpoint) and Supabase (direct adapter query) paths
+  const fetchPlanStatusRef = useRef<() => Promise<void>>();
+  fetchPlanStatusRef.current = async () => {
+    if (!config.projectId) return; // Skip when no project selected
+
+    try {
+      const adapterAny = config.adapter as any;
+      let resolved = false;
+
+      // Path 1: Try HTTP endpoint first (most reliable — server has authoritative data)
+      const baseUrl = adapterAny?.baseUrl || (adapterAny?.endpoint
+        ? adapterAny.endpoint.replace(/\/api\/feedback\/?$/, '')
+        : null);
+      const httpUrl = config.planCheckEndpoint
+        || (baseUrl ? `${baseUrl}/api/projects/${config.projectId}/plan-status` : null);
+
+      if (httpUrl) {
+        try {
+          const response = await fetch(httpUrl);
+          if (response.ok) {
+            const json = await response.json();
+            if (json.success && json.data) {
+              setPlanStatus(json.data);
+              setIsLimitReached(!json.data.can_submit);
+              resolved = true;
+            }
+          }
+        } catch {
+          // HTTP endpoint unavailable, try adapter path
+        }
+      }
+
+      // Path 2: Adapter getPlanStatus (Supabase direct — fallback when no HTTP server)
+      if (!resolved && typeof adapterAny?.getPlanStatus === 'function') {
+        try {
+          const status = await adapterAny.getPlanStatus(config.projectId);
+          if (status) {
+            setPlanStatus(status);
+            setIsLimitReached(!status.can_submit);
+          }
+        } catch {
+          // Adapter query failed too — allow submissions
+        }
+      }
+    } catch {
+      // Fail-safe: if we can't check, assume submissions are allowed
+    }
+  };
+
+  useEffect(() => {
+    fetchPlanStatusRef.current?.();
+
+    // Re-check every 5 minutes
+    const interval = setInterval(() => fetchPlanStatusRef.current?.(), 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [config.planCheckEndpoint, config.projectId, config.adapter]);
+
+  // Re-check plan status when dialog opens
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchPlanStatusRef.current?.();
+  }, [isOpen]);
+
   const addBreadcrumb = useCallback(
     (breadcrumb: Omit<Breadcrumb, 'timestamp'>) => {
       const fullBreadcrumb: Breadcrumb = {
@@ -304,6 +395,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     setIsOpen(false);
     setInitialFormState({});
     setSubmitError(null);
+    setShowNotifications(false);
   }, []);
 
   const submit = useCallback(
@@ -347,7 +439,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           category: formState.category,
           severity: formState.severity,
           impact: formState.impact,
-          email: formState.includeEmail ? formState.email : undefined,
+          email: formState.includeEmail ? formState.email : config.userEmail || undefined,
           context,
           screenshots: formState.includeScreenshot ? screenshots : undefined,
           highlighted_element: highlightedElement ? {
@@ -365,6 +457,17 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         };
 
         const result = await config.adapter.submit(event);
+
+        // Handle server-side limit_reached response
+        if (!result.success && result.error === 'limit_reached') {
+          setIsLimitReached(true);
+          setPlanStatus(prev => prev ? { ...prev, can_submit: false } : {
+            can_submit: false, tickets_used: 0, tickets_limit: 50, plan: 'free',
+            message: 'Monthly feedback limit reached.',
+          });
+          setSubmitError('This project has reached its monthly feedback limit.');
+          return { success: false };
+        }
 
         if (result.success) {
           setLastReportId(result.id || null);
@@ -419,6 +522,14 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     addBreadcrumb,
     setScreen,
     initialFormState,
+    planStatus,
+    isLimitReached,
+    notifications,
+    unreadCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    showNotifications,
+    setShowNotifications,
   };
 
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;

@@ -1,6 +1,5 @@
 import { useState } from 'react';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { API_URL, SESSION_KEYS } from '../lib/config';
 
 interface LocalLoginPageProps {
     onLogin: () => void;
@@ -51,9 +50,9 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
 
             const { token, user_id, role } = json.data;
             // Store session
-            sessionStorage.setItem('feedback_admin_auth', 'true');
-            sessionStorage.setItem('feedback_token', token);
-            sessionStorage.setItem('feedback_local_user', JSON.stringify({
+            sessionStorage.setItem(SESSION_KEYS.AUTH, 'true');
+            sessionStorage.setItem(SESSION_KEYS.TOKEN, token);
+            sessionStorage.setItem(SESSION_KEYS.LOCAL_USER, JSON.stringify({
                 user_id,
                 email: email.toLowerCase(),
                 role,

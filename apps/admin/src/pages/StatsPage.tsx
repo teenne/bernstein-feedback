@@ -1,27 +1,13 @@
-import { useState, useEffect } from 'react';
-import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects } from '../lib/feedbackApi';
+import { useState, useEffect, useCallback } from 'react';
+import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects, fetchProjectUsage } from '../lib/feedbackApi';
 import { useAuth } from '../hooks/useAuth';
+import { useFeedback } from 'akk-feedback';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
-
-interface Stats {
-    total: number;
-    by_type: Record<string, number>;
-    by_severity: Record<string, number>;
-}
-
-const TYPE_CONFIG: Record<string, { label: string; color: string; bgColor: string; darkBg: string }> = {
-    feedback: { label: 'Feedback', color: 'text-blue-500', bgColor: 'bg-blue-500', darkBg: 'bg-blue-500/10' },
-    bug_report: { label: 'Bug Reports', color: 'text-red-500', bgColor: 'bg-red-500', darkBg: 'bg-red-500/10' },
-    feature_request: { label: 'Feature Requests', color: 'text-emerald-500', bgColor: 'bg-emerald-500', darkBg: 'bg-emerald-500/10' },
-};
-
-const SEVERITY_CONFIG: Record<string, { label: string; color: string; bgColor: string; darkBg: string }> = {
-    critical: { label: 'Critical', color: 'text-red-600', bgColor: 'bg-red-600', darkBg: 'bg-red-500/10' },
-    high: { label: 'High', color: 'text-orange-500', bgColor: 'bg-orange-500', darkBg: 'bg-orange-500/10' },
-    medium: { label: 'Medium', color: 'text-yellow-500', bgColor: 'bg-yellow-500', darkBg: 'bg-yellow-500/10' },
-    low: { label: 'Low', color: 'text-gray-400', bgColor: 'bg-gray-400', darkBg: 'bg-gray-500/10' },
-};
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { TYPE_CONFIG, SEVERITY_CONFIG } from '../lib/constants';
+import type { Stats, UsageData } from '../lib/types';
 
 export function StatsPage() {
     const [stats, setStats] = useState<Stats | null>(null);
@@ -29,8 +15,26 @@ export function StatsPage() {
     const [error, setError] = useState('');
     const [userProjects, setUserProjects] = useState<string[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
+    const [usage, setUsage] = useState<UsageData | null>(null);
 
     const { isAdmin } = useAuth();
+    const { lastReportId } = useFeedback();
+
+    // Refresh usage after feedback submission
+    const refreshUsage = useCallback(async (projectId: string) => {
+        try {
+            const usageData = await fetchProjectUsage(projectId);
+            setUsage(usageData);
+        } catch {
+            // Non-critical
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!lastReportId) return;
+        const targetProject = selectedProject || userProjects[0];
+        if (targetProject) refreshUsage(targetProject);
+    }, [lastReportId, selectedProject, userProjects, refreshUsage]);
 
     useEffect(() => {
         (async () => {
@@ -46,6 +50,17 @@ export function StatsPage() {
                 ]);
                 setUserProjects(projectIds);
                 setStats(data);
+
+                // Fetch usage for selected project (or first project)
+                const targetProject = selectedProject || projectIds[0];
+                if (targetProject) {
+                    try {
+                        const usageData = await fetchProjectUsage(targetProject);
+                        setUsage(usageData);
+                    } catch {
+                        // Usage fetch is non-critical
+                    }
+                }
             } catch (err: any) {
                 setError(err.message || 'Failed to load stats');
             }
@@ -53,25 +68,8 @@ export function StatsPage() {
         })();
     }, [selectedProject, isAdmin]);
 
-    if (loading) {
-        return (
-            <div className="flex flex-col items-center justify-center py-20">
-                <div className="h-10 w-10 border-2 border-amber-500 rounded-full border-t-transparent animate-spin mb-4" />
-                <p className="text-sm text-gray-400">Loading stats...</p>
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
-                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-                </svg>
-                {error}
-            </div>
-        );
-    }
+    if (loading) return <LoadingSpinner message="Loading stats..." />;
+    if (error) return <ErrorMessage message={error} />;
 
     if (!stats) return null;
 
@@ -112,11 +110,54 @@ export function StatsPage() {
                             <GlassCard key={key} className="!p-5 relative overflow-hidden">
                                 <div className={`absolute top-0 right-0 w-20 h-20 ${cfg.darkBg} rounded-full -translate-y-1/2 translate-x-1/2`} />
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{cfg.label}</p>
-                                <p className={`text-3xl font-bold mt-1 ${cfg.color}`}>{count}</p>
+                                <p className={`text-3xl font-bold mt-1 ${cfg.textColor}`}>{count}</p>
                             </GlassCard>
                         );
                     })}
                 </div>
+
+                {/* Usage Meter */}
+                {usage && (
+                    <GlassCard className="!p-5">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Monthly Usage</p>
+                                <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{usage.month}</p>
+                            </div>
+                            <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
+                                usage.plan === 'pro'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+                                    : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
+                            }`}>
+                                {usage.plan === 'pro' ? 'Pro' : 'Free'} Plan
+                            </span>
+                        </div>
+                        <div className="flex items-end gap-3 mb-2">
+                            <span className="text-2xl font-bold text-gray-900 dark:text-white">{usage.tickets_used}</span>
+                            <span className="text-sm text-gray-400 dark:text-gray-500 mb-0.5">/ {usage.tickets_limit} tickets</span>
+                        </div>
+                        <div className="h-2.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                    usage.percentage_used >= 90
+                                        ? 'bg-red-500'
+                                        : usage.percentage_used >= 70
+                                            ? 'bg-amber-500'
+                                            : 'bg-emerald-500'
+                                }`}
+                                style={{ width: `${Math.min(usage.percentage_used, 100)}%` }}
+                            />
+                        </div>
+                        <div className="flex justify-between mt-1.5">
+                            <span className="text-xs text-gray-400">{usage.percentage_used}% used</span>
+                            {usage.percentage_used >= 80 && (
+                                <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                                    {usage.percentage_used >= 100 ? 'Limit reached' : 'Approaching limit'}
+                                </span>
+                            )}
+                        </div>
+                    </GlassCard>
+                )}
 
                 <div className="grid md:grid-cols-2 gap-6">
                     {/* By Type */}
@@ -138,7 +179,7 @@ export function StatsPage() {
                                     return (
                                         <div key={type}>
                                             <div className="flex justify-between text-sm mb-1.5">
-                                                <span className={`font-medium ${cfg.color}`}>{cfg.label}</span>
+                                                <span className={`font-medium ${cfg.textColor}`}>{cfg.label}</span>
                                                 <span className="font-bold text-gray-900 dark:text-white">{count}</span>
                                             </div>
                                             <div className="h-2.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">

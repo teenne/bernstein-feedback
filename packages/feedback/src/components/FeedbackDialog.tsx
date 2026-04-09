@@ -18,6 +18,14 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     initialFormState,
     config,
     captureContext,
+    isLimitReached,
+    planStatus,
+    notifications,
+    unreadCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    showNotifications,
+    setShowNotifications,
   } = useFeedback();
 
   const [formState, setFormState] = useState<FeedbackFormState>({
@@ -244,7 +252,111 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
               )}
             </Dialog.Title>
 
-            <Tabs.Root value={formState.type} onValueChange={handleTabChange}>
+            {/* Plan limit reached — show message instead of form */}
+            {isLimitReached && planStatus && planStatus.tickets_limit > 0 && (
+              <div className="bf-py-8 bf-text-center">
+                <div className="bf-mx-auto bf-w-12 bf-h-12 bf-rounded-full bf-bg-amber-100 bf-flex bf-items-center bf-justify-center bf-mb-4">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <h3 className="bf-text-base bf-font-semibold bf-text-feedback-text bf-mb-2">
+                  Feedback limit reached
+                </h3>
+                <p className="bf-text-sm bf-text-feedback-text-muted bf-mb-4 bf-max-w-xs bf-mx-auto">
+                  {planStatus?.message || 'This project has reached its monthly feedback limit. The developer has been notified.'}
+                </p>
+                {planStatus && (
+                  <div className="bf-text-xs bf-text-feedback-text-muted">
+                    {planStatus.tickets_used} / {planStatus.tickets_limit} tickets used this month
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={close}
+                  className="bf-mt-6 bf-px-4 bf-py-2 bf-text-sm bf-font-medium bf-text-feedback-text bf-bg-feedback-bg-secondary bf-rounded-md hover:bf-bg-feedback-border bf-transition-colors focus:bf-outline-none focus-visible:bf-ring-2 focus-visible:bf-ring-feedback-primary"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+
+            {/* Notifications / Updates view */}
+            {showNotifications && notifications.length > 0 && (
+              <div>
+                <div className="bf-flex bf-items-center bf-justify-between bf-mb-4">
+                  <h3 className="bf-text-sm bf-font-semibold bf-text-feedback-text">
+                    Updates ({unreadCount} new)
+                  </h3>
+                  <div className="bf-flex bf-gap-2">
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllNotificationsRead}
+                        className="bf-text-xs bf-text-feedback-primary hover:bf-underline"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowNotifications(false)}
+                      className="bf-text-xs bf-text-feedback-primary bf-font-medium hover:bf-underline"
+                    >
+                      New feedback
+                    </button>
+                  </div>
+                </div>
+                <div className="bf-space-y-2 bf-max-h-[50vh] bf-overflow-y-auto">
+                  {notifications.map((n) => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => markNotificationRead(n.id)}
+                      className={`bf-w-full bf-text-left bf-p-3 bf-rounded-lg bf-border bf-transition-all ${
+                        n.read
+                          ? 'bf-bg-feedback-bg bf-border-feedback-border bf-opacity-60'
+                          : 'bf-bg-feedback-primary/5 bf-border-feedback-primary/20'
+                      }`}
+                    >
+                      <div className="bf-flex bf-items-start bf-gap-2">
+                        <div className={`bf-mt-0.5 bf-w-2 bf-h-2 bf-rounded-full bf-shrink-0 ${n.read ? 'bf-bg-gray-300' : 'bf-bg-feedback-primary'}`} />
+                        <div className="bf-flex-1 bf-min-w-0">
+                          <p className="bf-text-sm bf-font-medium bf-text-feedback-text bf-truncate">{n.title}</p>
+                          {n.message && (
+                            <p className="bf-text-xs bf-text-feedback-text-muted bf-mt-0.5 bf-truncate">{n.message}</p>
+                          )}
+                          <p className="bf-text-[10px] bf-text-feedback-text-muted bf-mt-1">
+                            {new Date(n.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="bf-text-green-500 bf-shrink-0 bf-mt-0.5">
+                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Show empty notifications state if toggled but nothing to show */}
+            {showNotifications && notifications.length === 0 && (
+              <div className="bf-py-8 bf-text-center">
+                <p className="bf-text-sm bf-text-feedback-text-muted bf-mb-4">No updates yet</p>
+                <button
+                  type="button"
+                  onClick={() => setShowNotifications(false)}
+                  className="bf-text-sm bf-text-feedback-primary bf-font-medium hover:bf-underline"
+                >
+                  Send feedback instead
+                </button>
+              </div>
+            )}
+
+            {!showNotifications && !(isLimitReached && planStatus && planStatus.tickets_limit > 0) && <><Tabs.Root value={formState.type} onValueChange={handleTabChange}>
               {/* Tabs List */}
               <Tabs.List className="bf-flex bf-gap-1 bf-mb-5 bf-bg-feedback-bg-secondary bf-p-1.5 bf-rounded-xl">
                 <Tabs.Trigger
@@ -549,7 +661,7 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                   {isSubmitting ? 'Sending...' : 'Send'}
                 </button>
               </div>
-            </form>
+            </form></>}
 
             {config.showBranding && <IntegrityFooter />}
 

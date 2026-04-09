@@ -5,6 +5,6 @@ export {
   type LocalStorageAdapterOptions,
 } from './localStorage';
 export { createWebhookAdapter, webhookAdapter, type WebhookAdapterOptions } from './webhookAdapter';
-export { supabaseAdapter, type SupabaseAdapterOptions } from './supabase-adapter';
+export { supabaseAdapter, type SupabaseAdapterOptions, type SupabaseAdapterWithPlan } from './supabase-adapter';
 export { autoAdapter, type AutoAdapterOptions } from './autoAdapter';
 

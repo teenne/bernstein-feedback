@@ -35,6 +35,18 @@ export interface AutoAdapterOptions {
  */
 export function autoAdapter(options: AutoAdapterOptions = {}): FeedbackAdapter & {
     mode: () => 'supabase' | 'local-server';
+    getPlanStatus?: (projectId: string) => Promise<{
+        can_submit: boolean;
+        tickets_used: number;
+        tickets_limit: number;
+        plan: string;
+        message?: string;
+    }>;
+    getNotifications?: (projectId: string, userId: string) => Promise<{ data: any[]; unread_count: number }>;
+    markNotificationRead?: (id: string) => Promise<void>;
+    markAllNotificationsRead?: (projectId: string, userId: string) => Promise<void>;
+    /** Base URL of the HTTP server */
+    baseUrl: string;
 } {
     const {
         supabaseUrl,
@@ -77,6 +89,15 @@ export function autoAdapter(options: AutoAdapterOptions = {}): FeedbackAdapter &
 
             return local.submit(event);
         },
+
+        // Pass through Supabase adapter methods for plan + notification support
+        getPlanStatus: cloud?.getPlanStatus?.bind(cloud),
+        getNotifications: cloud?.getNotifications?.bind(cloud),
+        markNotificationRead: cloud?.markNotificationRead?.bind(cloud),
+        markAllNotificationsRead: cloud?.markAllNotificationsRead?.bind(cloud),
+
+        /** Base URL of the HTTP server (for deriving plan-status / notification endpoints) */
+        baseUrl: localServerUrl.replace(/\/$/, ''),
 
         mode: () => currentMode,
     };

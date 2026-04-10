@@ -1,16 +1,22 @@
--- Feedback tables for @bernstein/feedback
--- Run this in your Supabase SQL Editor (Database > SQL Editor)
+-- Feedback tables for @bernstein/feedback (Supabase)
+-- Run this in your Supabase SQL Editor (Database > SQL Editor).
+--
+-- This script is IDEMPOTENT and SAFE to re-run on existing deployments:
+--   * Uses CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN IF NOT EXISTS
+--   * Uses CREATE INDEX IF NOT EXISTS
+--   * Seeds plans with ON CONFLICT DO NOTHING
+--   * Drops + recreates RLS policies (stateless — no data loss)
+--   * No DROP TABLE / TRUNCATE / destructive DELETE statements
+--
+-- It will NOT delete any existing rows. Schema-changing operations are
+-- additive only (new tables, new columns, new indexes, new policies).
 
-DROP TABLE IF EXISTS feedback_context;
-DROP TABLE IF EXISTS feedback;
-DROP TABLE IF EXISTS project_members;
-DROP TABLE IF EXISTS projects;
-DROP TABLE IF EXISTS user_roles;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
 -- User Roles (dynamic admin system)
 -- ============================================================
-CREATE TABLE user_roles (
+CREATE TABLE IF NOT EXISTS user_roles (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
   email TEXT NOT NULL,
@@ -19,8 +25,8 @@ CREATE TABLE user_roles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_user_roles_user_id ON user_roles(user_id);
-CREATE INDEX idx_user_roles_email ON user_roles(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_roles_email ON user_roles(email);
 
 -- Helper function for RLS policies (SECURITY DEFINER to avoid circular RLS)
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -59,26 +65,77 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ============================================================
+-- Plans (single source of truth for plan definitions)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  price_monthly INTEGER DEFAULT 0,          -- cents (0 = free, 2900 = $29)
+  max_projects INTEGER DEFAULT 1,
+  max_tickets_per_month INTEGER DEFAULT 50,
+  features JSONB DEFAULT '{}',              -- feature flags: { ai_clustering, posthog, api_access, etc. }
+  is_active BOOLEAN DEFAULT TRUE,
+  display_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Seed plans: Free + Paid (per product doc)
+INSERT INTO plans (id, name, description, price_monthly, max_projects, max_tickets_per_month, features, display_order)
+VALUES
+  ('free', 'Free', 'For individuals and small projects. No expiry, no credit card required.', 0, 1, 50,
+   '{"ai_clustering": false, "posthog": false, "api_access": false, "self_hosted": false}', 1),
+  ('paid', 'Paid', 'For teams shipping real products. Multiple projects, higher volume, advanced features.', 0, -1, -1,
+   '{"ai_clustering": true, "posthog": true, "api_access": true, "self_hosted": false}', 2)
+ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================
 -- Projects table
 -- ============================================================
-CREATE TABLE projects (
+-- Note: `plan` CHECK constraint is added separately below so existing
+-- deployments with the legacy ('free','pro') constraint can be migrated
+-- without conflicts on re-run.
+CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT,
   owner_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   owner_email TEXT,
-  plan TEXT CHECK (plan IN ('free', 'pro')) DEFAULT 'free',
+  plan TEXT DEFAULT 'free',
+  plan_id TEXT REFERENCES plans(id) DEFAULT 'free',
+  plan_limits JSONB DEFAULT '{"max_projects": 1, "max_tickets_per_month": 50}',
   config JSONB DEFAULT '{}',
   api_key TEXT DEFAULT encode(gen_random_bytes(24), 'hex'),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_projects_owner ON projects(owner_id);
-CREATE INDEX idx_projects_email ON projects(owner_email);
+-- Additive migrations for deployments that pre-date the plans system
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_id TEXT REFERENCES plans(id) DEFAULT 'free';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_limits JSONB DEFAULT '{"max_projects": 1, "max_tickets_per_month": 50}';
+
+-- Ensure 'free' default is set on existing deployments (idempotent)
+ALTER TABLE projects ALTER COLUMN plan SET DEFAULT 'free';
+ALTER TABLE projects ALTER COLUMN plan_id SET DEFAULT 'free';
+
+-- Migrate any legacy 'pro' plan values to 'paid' (matches current plans seed)
+UPDATE projects SET plan = 'paid' WHERE plan = 'pro';
+
+-- Backfill plan_id from plan, and default any null plans to 'free'
+UPDATE projects SET plan = 'free' WHERE plan IS NULL;
+UPDATE projects SET plan_id = plan WHERE plan_id IS DISTINCT FROM plan;
+
+-- Refresh the plan CHECK constraint (drops legacy ('free','pro') if present)
+ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_plan_check;
+ALTER TABLE projects ADD CONSTRAINT projects_plan_check CHECK (plan IN ('free', 'paid'));
+
+CREATE INDEX IF NOT EXISTS idx_projects_plan_id ON projects(plan_id);
+CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
+CREATE INDEX IF NOT EXISTS idx_projects_email ON projects(owner_email);
 
 -- ============================================================
 -- Project Members (assign users to projects)
 -- ============================================================
-CREATE TABLE project_members (
+CREATE TABLE IF NOT EXISTS project_members (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -88,8 +145,8 @@ CREATE TABLE project_members (
   UNIQUE(project_id, user_id)
 );
 
-CREATE INDEX idx_project_members_project ON project_members(project_id);
-CREATE INDEX idx_project_members_user ON project_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
 
 -- Helper functions for RLS (SECURITY DEFINER to avoid circular recursion)
 CREATE OR REPLACE FUNCTION public.is_project_member(p_project_id TEXT)
@@ -118,7 +175,9 @@ $$ LANGUAGE sql SECURITY DEFINER STABLE;
 -- ============================================================
 -- Core feedback table
 -- ============================================================
-CREATE TABLE feedback (
+-- Note: `status` column and its CHECK constraint are added below via ALTER
+-- so existing deployments without the column get migrated cleanly.
+CREATE TABLE IF NOT EXISTS feedback (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id TEXT NOT NULL,
 
@@ -162,8 +221,18 @@ CREATE TABLE feedback (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Additive migrations for status tracking (loop-close notifications)
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_status_check;
+ALTER TABLE feedback ADD CONSTRAINT feedback_status_check
+  CHECK (status IN ('open', 'in_progress', 'resolved', 'closed'));
+
 -- Technical context (heavy data, separated for performance)
-CREATE TABLE feedback_context (
+CREATE TABLE IF NOT EXISTS feedback_context (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   feedback_id UUID REFERENCES feedback(id) ON DELETE CASCADE,
   viewport JSONB,
@@ -179,20 +248,61 @@ CREATE TABLE feedback_context (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============================================================
+-- Monthly usage tracking per project (plan system)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS project_usage (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,              -- 'YYYY-MM' format (UTC)
+  ticket_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(project_id, month)
+);
+
+-- ============================================================
+-- Notifications for end-user loop-close delivery
+-- ============================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  feedback_id UUID NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+  user_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('status_change', 'resolved')),
+  title TEXT NOT NULL,
+  message TEXT,
+  read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes
-CREATE INDEX idx_feedback_project ON feedback(project_id);
-CREATE INDEX idx_feedback_type ON feedback(type);
-CREATE INDEX idx_feedback_created ON feedback(created_at DESC);
-CREATE INDEX idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_feedback_screen ON feedback(screen_id) WHERE screen_id IS NOT NULL;
-CREATE INDEX idx_feedback_context_fid ON feedback_context(feedback_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_type ON feedback(type);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_screen ON feedback(screen_id) WHERE screen_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_context_fid ON feedback_context(feedback_id);
+CREATE INDEX IF NOT EXISTS idx_project_usage_project_month ON project_usage(project_id, month);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id, user_id, read);
+CREATE INDEX IF NOT EXISTS idx_notifications_feedback ON notifications(feedback_id);
 
 -- ============================================================
 -- Row Level Security (RLS)
 -- ============================================================
+-- ALTER TABLE ... ENABLE ROW LEVEL SECURITY is idempotent.
+-- Each policy is dropped + recreated so re-runs pick up the latest definition.
 
 -- user_roles RLS
 ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can read own role" ON user_roles;
+DROP POLICY IF EXISTS "Admins can read all roles" ON user_roles;
+DROP POLICY IF EXISTS "Admins can update roles" ON user_roles;
+DROP POLICY IF EXISTS "Admins can delete roles" ON user_roles;
+DROP POLICY IF EXISTS "Users can insert own role" ON user_roles;
+DROP POLICY IF EXISTS "Service role full access on user_roles" ON user_roles;
 
 CREATE POLICY "Users can read own role" ON user_roles
   FOR SELECT USING (auth.uid() = user_id);
@@ -209,6 +319,12 @@ CREATE POLICY "Service role full access on user_roles" ON user_roles
 
 -- Projects RLS (admins see all, owners + members see their projects)
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Read own or member projects, admin reads all" ON projects;
+DROP POLICY IF EXISTS "Insert own projects" ON projects;
+DROP POLICY IF EXISTS "Update own projects or admin updates all" ON projects;
+DROP POLICY IF EXISTS "Delete own projects or admin deletes all" ON projects;
+DROP POLICY IF EXISTS "Service role projects access" ON projects;
 
 CREATE POLICY "Read own or member projects, admin reads all" ON projects
   FOR SELECT USING (
@@ -228,6 +344,13 @@ CREATE POLICY "Service role projects access" ON projects
 -- Project Members RLS
 ALTER TABLE project_members ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Members can read own memberships" ON project_members;
+DROP POLICY IF EXISTS "Owners and admins can read all members" ON project_members;
+DROP POLICY IF EXISTS "Owners and admins can insert members" ON project_members;
+DROP POLICY IF EXISTS "Owners and admins can update members" ON project_members;
+DROP POLICY IF EXISTS "Owners and admins can delete members" ON project_members;
+DROP POLICY IF EXISTS "Service role members access" ON project_members;
+
 CREATE POLICY "Members can read own memberships" ON project_members
   FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Owners and admins can read all members" ON project_members
@@ -244,10 +367,30 @@ CREATE POLICY "Service role members access" ON project_members
 -- Feedback RLS
 ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow public feedback submission" ON feedback;
+DROP POLICY IF EXISTS "Read feedback for own/member projects, admin reads all" ON feedback;
+DROP POLICY IF EXISTS "Update feedback for own/member projects, admin updates all" ON feedback;
+DROP POLICY IF EXISTS "Delete feedback for own/member projects, admin deletes all" ON feedback;
+DROP POLICY IF EXISTS "Allow service role full access" ON feedback;
+
 CREATE POLICY "Allow public feedback submission" ON feedback
   FOR INSERT WITH CHECK (true);
 CREATE POLICY "Read feedback for own/member projects, admin reads all" ON feedback
   FOR SELECT USING (
+    public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  );
+CREATE POLICY "Update feedback for own/member projects, admin updates all" ON feedback
+  FOR UPDATE USING (
+    public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  )
+  WITH CHECK (
+    public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  );
+CREATE POLICY "Delete feedback for own/member projects, admin deletes all" ON feedback
+  FOR DELETE USING (
     public.is_admin()
     OR project_id IN (SELECT public.user_project_ids())
   );
@@ -257,6 +400,10 @@ CREATE POLICY "Allow service role full access" ON feedback
 -- Feedback context RLS
 ALTER TABLE feedback_context ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow public context insert" ON feedback_context;
+DROP POLICY IF EXISTS "Allow authenticated context read" ON feedback_context;
+DROP POLICY IF EXISTS "Allow service role context access" ON feedback_context;
+
 CREATE POLICY "Allow public context insert" ON feedback_context
   FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow authenticated context read" ON feedback_context
@@ -264,13 +411,78 @@ CREATE POLICY "Allow authenticated context read" ON feedback_context
 CREATE POLICY "Allow service role context access" ON feedback_context
   FOR ALL USING (auth.role() = 'service_role');
 
+-- Plans RLS (publicly readable, admin-only writes)
+ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can read active plans" ON plans;
+DROP POLICY IF EXISTS "Admins can insert plans" ON plans;
+DROP POLICY IF EXISTS "Admins can update plans" ON plans;
+DROP POLICY IF EXISTS "Admins can delete plans" ON plans;
+DROP POLICY IF EXISTS "Service role full access on plans" ON plans;
+
+CREATE POLICY "Anyone can read active plans" ON plans
+  FOR SELECT USING (true);
+CREATE POLICY "Admins can insert plans" ON plans
+  FOR INSERT WITH CHECK (public.is_admin());
+CREATE POLICY "Admins can update plans" ON plans
+  FOR UPDATE USING (public.is_admin());
+CREATE POLICY "Admins can delete plans" ON plans
+  FOR DELETE USING (public.is_admin());
+CREATE POLICY "Service role full access on plans" ON plans
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- Project usage RLS
+ALTER TABLE project_usage ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Read usage for own/member projects, admin reads all" ON project_usage;
+DROP POLICY IF EXISTS "Allow public usage insert" ON project_usage;
+DROP POLICY IF EXISTS "Allow public usage update" ON project_usage;
+DROP POLICY IF EXISTS "Service role full access on project_usage" ON project_usage;
+
+CREATE POLICY "Read usage for own/member projects, admin reads all" ON project_usage
+  FOR SELECT USING (
+    public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  );
+CREATE POLICY "Allow public usage insert" ON project_usage
+  FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public usage update" ON project_usage
+  FOR UPDATE USING (true);
+CREATE POLICY "Service role full access on project_usage" ON project_usage
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- Notifications RLS
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can read own notifications" ON notifications;
+DROP POLICY IF EXISTS "Allow public notification insert" ON notifications;
+DROP POLICY IF EXISTS "Users can update own notifications (mark read)" ON notifications;
+DROP POLICY IF EXISTS "Service role full access on notifications" ON notifications;
+
+CREATE POLICY "Users can read own notifications" ON notifications
+  FOR SELECT USING (
+    user_id = auth.uid()::text
+    OR public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  );
+CREATE POLICY "Allow public notification insert" ON notifications
+  FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own notifications (mark read)" ON notifications
+  FOR UPDATE USING (
+    user_id = auth.uid()::text
+    OR public.is_admin()
+    OR project_id IN (SELECT public.user_project_ids())
+  );
+CREATE POLICY "Service role full access on notifications" ON notifications
+  FOR ALL USING (auth.role() = 'service_role');
+
 -- ============================================================
--- Grants
+-- Grants (idempotent — re-running has no effect)
 -- ============================================================
 GRANT SELECT ON user_roles TO authenticated;
 GRANT ALL ON user_roles TO service_role;
 GRANT INSERT ON feedback TO anon;
-GRANT SELECT ON feedback TO authenticated;
+GRANT SELECT, UPDATE, DELETE ON feedback TO authenticated;
 GRANT ALL ON feedback TO service_role;
 GRANT INSERT ON feedback_context TO anon;
 GRANT SELECT ON feedback_context TO authenticated;
@@ -279,6 +491,32 @@ GRANT ALL ON projects TO authenticated;
 GRANT ALL ON projects TO service_role;
 GRANT ALL ON project_members TO authenticated;
 GRANT ALL ON project_members TO service_role;
+GRANT SELECT ON plans TO anon, authenticated;
+GRANT ALL ON plans TO service_role;
+GRANT INSERT, UPDATE ON project_usage TO anon;
+GRANT SELECT ON project_usage TO authenticated;
+GRANT ALL ON project_usage TO service_role;
+GRANT INSERT ON notifications TO anon;
+GRANT SELECT, UPDATE ON notifications TO authenticated;
+GRANT ALL ON notifications TO service_role;
+
+-- ============================================================
+-- Realtime: enable push notifications via Supabase Realtime
+-- ============================================================
+-- Adds the `notifications` table to the supabase_realtime publication so the
+-- @bernstein/feedback widget can subscribe to row changes via WebSocket
+-- instead of polling. Safe on plain Postgres (publication won't exist there).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE notifications;
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+      WHEN OTHERS THEN NULL;
+    END;
+  END IF;
+END $$;
 
 -- ============================================================
 -- Backfill existing users & seed first admin
@@ -292,4 +530,4 @@ ON CONFLICT (user_id) DO NOTHING;
 -- VALUES ((SELECT id FROM auth.users WHERE email = 'your-email@example.com'), 'your-email@example.com', 'admin')
 -- ON CONFLICT (user_id) DO UPDATE SET role = 'admin', updated_at = NOW();
 
-SELECT 'All tables created successfully!' AS status;
+SELECT 'All tables created/migrated successfully!' AS status;

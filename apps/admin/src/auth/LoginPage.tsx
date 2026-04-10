@@ -1,11 +1,120 @@
-import { Auth } from '@supabase/auth-ui-react';
-import { ThemeSupa } from '@supabase/auth-ui-shared';
+import { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
+
+type Mode = 'login' | 'register';
+type OAuthProvider = 'google' | 'github';
+
+const EyeIcon = ({ open }: { open: boolean }) => (
+    open ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+            <circle cx="12" cy="12" r="3" />
+        </svg>
+    ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+            <line x1="2" x2="22" y1="2" y2="22" />
+        </svg>
+    )
+);
 
 export default function LoginPage() {
     const { config } = useFeedbackConfig();
     const isDark = config.darkMode;
+
+    const [mode, setMode] = useState<Mode>('login');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+    const [error, setError] = useState('');
+    const [info, setInfo] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const resetMessages = () => { setError(''); setInfo(''); };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        resetMessages();
+
+        if (!supabase) {
+            setError('Supabase is not configured.');
+            return;
+        }
+
+        if (!email || !password) {
+            setError('Email and password are required.');
+            return;
+        }
+
+        if (mode === 'register') {
+            if (password.length < 6) {
+                setError('Password must be at least 6 characters.');
+                return;
+            }
+            if (password !== confirmPassword) {
+                setError('Passwords do not match.');
+                return;
+            }
+        }
+
+        setLoading(true);
+        try {
+            if (mode === 'login') {
+                const { error: err } = await supabase.auth.signInWithPassword({ email: email.toLowerCase(), password });
+                if (err) {
+                    setError(err.message);
+                }
+                // On success, AuthGateway's onAuthStateChange listener handles redirect.
+            } else {
+                const { data, error: err } = await supabase.auth.signUp({ email: email.toLowerCase(), password });
+                if (err) {
+                    setError(err.message);
+                } else if (data.user && !data.session) {
+                    // Email confirmation required
+                    setInfo('Account created. Check your email to confirm before signing in.');
+                    setMode('login');
+                    setPassword('');
+                    setConfirmPassword('');
+                }
+                // If session is returned, AuthGateway redirects automatically.
+            }
+        } catch (err: any) {
+            setError(err?.message || 'Authentication failed.');
+        }
+        setLoading(false);
+    };
+
+    const handleOAuth = async (provider: OAuthProvider) => {
+        if (!supabase) {
+            setError('Supabase is not configured.');
+            return;
+        }
+        resetMessages();
+        setLoading(true);
+        const { error: err } = await supabase.auth.signInWithOAuth({
+            provider,
+            options: { redirectTo: window.location.origin },
+        });
+        if (err) {
+            setError(err.message);
+            setLoading(false);
+        }
+    };
+
+    const switchMode = () => {
+        setMode(mode === 'login' ? 'register' : 'login');
+        setConfirmPassword('');
+        setShowConfirmPassword(false);
+        resetMessages();
+    };
+
+    const inputClass = 'w-full px-3 py-3 pr-10 border border-gray-200 dark:border-white/10 rounded-lg bg-white dark:bg-black/20 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all';
+    const eyeButtonClass = 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-amber-500 dark:text-gray-400 dark:hover:text-amber-400 transition-colors';
 
     return (
         <div className="min-h-screen w-full bg-gray-50 dark:bg-gray-950 flex flex-col items-center justify-center p-4 relative overflow-hidden transition-colors duration-500">
@@ -36,67 +145,132 @@ export default function LoginPage() {
                 </div>
 
                 <h2 className="text-4xl font-bold text-gray-900 dark:text-white tracking-tight transition-colors duration-500">
-                    Welcome Back
+                    {mode === 'login' ? 'Welcome Back' : 'Create Account'}
                 </h2>
                 <p className="text-gray-500 dark:text-gray-400 mt-2 text-base transition-colors duration-500">
-                    Sign in to manage your feedback widgets
+                    {mode === 'login' ? 'Sign in to manage your feedback widgets' : 'Set up your admin account in seconds'}
                 </p>
             </div>
 
             {/* Glassmorphic Card */}
             <div className="relative z-10 w-full max-w-md bg-white/80 dark:bg-white/5 backdrop-blur-2xl border border-gray-200 dark:border-white/10 rounded-3xl shadow-2xl dark:shadow-black/50 p-8 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100 transition-all duration-500">
-                <Auth
-                    supabaseClient={supabase as any}
-                    appearance={{
-                        theme: ThemeSupa,
-                        variables: {
-                            default: {
-                                colors: {
-                                    brand: '#f59e0b', // Amber-500
-                                    brandAccent: '#d97706', // Amber-600
-                                    brandButtonText: 'white',
-                                    defaultButtonBackground: isDark ? '#27272a' : '#f3f4f6', // Zinc-800 vs Gray-100
-                                    defaultButtonBackgroundHover: isDark ? '#3f3f46' : '#e5e7eb', // Zinc-700 vs Gray-200
-                                    inputBackground: isDark ? 'rgba(0,0,0,0.2)' : 'white',
-                                    inputBorder: isDark ? 'rgba(255,255,255,0.1)' : '#e5e7eb',
-                                    inputBorderHover: 'rgba(245,158,11,0.5)',
-                                    inputBorderFocus: '#f59e0b',
-                                    inputText: isDark ? 'white' : '#111827',
-                                    inputPlaceholder: isDark ? '#71717a' : '#9ca3af',
-                                    defaultButtonText: isDark ? 'white' : '#111827',
-                                },
-                                space: {
-                                    inputPadding: '12px',
-                                    buttonPadding: '12px',
-                                },
-                                borderWidths: {
-                                    buttonBorderWidth: '0px',
-                                    inputBorderWidth: '1px',
-                                },
-                                radii: {
-                                    borderRadiusButton: '8px',
-                                    buttonBorderRadius: '8px',
-                                    inputBorderRadius: '8px',
-                                },
-                                fonts: {
-                                    bodyFontFamily: '"Inter", sans-serif',
-                                    buttonFontFamily: '"Inter", sans-serif',
-                                },
-                            },
-                        },
-                        className: {
-                            container: 'flex flex-col gap-4',
-                            button: 'font-medium shadow-lg transition-all active:scale-[0.98]',
-                            input: 'transition-all focus:ring-2 focus:ring-amber-500/20 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500',
-                            label: 'text-gray-700 dark:text-gray-300 text-sm font-medium mb-1 transition-colors',
-                            loader: 'text-amber-500',
-                            anchor: 'text-amber-600 dark:text-amber-500 hover:text-amber-500 dark:hover:text-amber-400 transition-colors text-sm text-center block mt-2',
-                        }
-                    }}
-                    providers={['google', 'github']}
-                    theme={isDark ? 'dark' : 'default'}
-                    showLinks={true}
-                />
+                <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                    {/* Email */}
+                    <div>
+                        <label className="text-gray-700 dark:text-gray-300 text-sm font-medium mb-1 block">Email</label>
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => { setEmail(e.target.value); resetMessages(); }}
+                            placeholder="you@example.com"
+                            autoComplete="email"
+                            autoFocus
+                            className={inputClass.replace(' pr-10', '')}
+                        />
+                    </div>
+
+                    {/* Password */}
+                    <div>
+                        <label className="text-gray-700 dark:text-gray-300 text-sm font-medium mb-1 block">Password</label>
+                        <div className="relative">
+                            <input
+                                type={showPassword ? 'text' : 'password'}
+                                value={password}
+                                onChange={(e) => { setPassword(e.target.value); resetMessages(); }}
+                                placeholder={mode === 'register' ? 'Min 6 characters' : 'Enter your password'}
+                                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                                className={inputClass}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword((v) => !v)}
+                                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                className={eyeButtonClass}
+                            >
+                                <EyeIcon open={showPassword} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Confirm Password (register only) */}
+                    {mode === 'register' && (
+                        <div>
+                            <label className="text-gray-700 dark:text-gray-300 text-sm font-medium mb-1 block">Confirm Password</label>
+                            <div className="relative">
+                                <input
+                                    type={showConfirmPassword ? 'text' : 'password'}
+                                    value={confirmPassword}
+                                    onChange={(e) => { setConfirmPassword(e.target.value); resetMessages(); }}
+                                    placeholder="Re-enter password"
+                                    autoComplete="new-password"
+                                    className={inputClass}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowConfirmPassword((v) => !v)}
+                                    aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                                    className={eyeButtonClass}
+                                >
+                                    <EyeIcon open={showConfirmPassword} />
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {error && <p className="text-red-500 text-sm">{error}</p>}
+                    {info && <p className="text-amber-600 dark:text-amber-400 text-sm">{info}</p>}
+
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        className="w-full py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98]"
+                    >
+                        {loading ? 'Please wait...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+                    </button>
+                </form>
+
+                {/* Divider */}
+                <div className="flex items-center gap-3 my-6">
+                    <div className="flex-1 h-px bg-gray-200 dark:bg-white/10" />
+                    <span className="text-xs text-gray-400 dark:text-gray-500 uppercase tracking-wider">or continue with</span>
+                    <div className="flex-1 h-px bg-gray-200 dark:bg-white/10" />
+                </div>
+
+                {/* OAuth providers */}
+                <div className="flex flex-col gap-3">
+                    <button
+                        type="button"
+                        onClick={() => handleOAuth('google')}
+                        disabled={loading}
+                        className="w-full py-3 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 dark:text-white font-medium rounded-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09Z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.35-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.93l3.66-2.83Z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.83C6.71 7.31 9.14 5.38 12 5.38Z"/></svg>
+                        Continue with Google
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleOAuth('github')}
+                        disabled={loading}
+                        className="w-full py-3 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 dark:text-white font-medium rounded-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.26 5.69.41.36.78 1.05.78 2.13v3.16c0 .31.21.67.79.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5Z"/></svg>
+                        Continue with GitHub
+                    </button>
+                </div>
+
+                {/* Mode toggle */}
+                <div className="mt-6 text-center">
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+                        <button
+                            type="button"
+                            onClick={switchMode}
+                            className="text-amber-600 dark:text-amber-500 hover:text-amber-500 dark:hover:text-amber-400 font-medium transition-colors"
+                        >
+                            {mode === 'login' ? 'Sign Up' : 'Sign In'}
+                        </button>
+                    </p>
+                </div>
             </div>
 
             {/* Footer */}

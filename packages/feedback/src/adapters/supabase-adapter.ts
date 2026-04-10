@@ -1,5 +1,30 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { FeedbackAdapter, FeedbackEvent } from '../schemas';
+
+// Module-level cache so repeated supabaseAdapter() calls (e.g. from a React
+// useMemo whose deps change as config loads) reuse the same underlying client.
+// Creating a fresh client per call would register a new GoTrueClient under the
+// same storageKey and trigger the "Multiple GoTrueClient instances" warning.
+const clientCache = new Map<string, SupabaseClient>();
+
+function getCachedClient(supabaseUrl: string, supabaseKey: string): SupabaseClient {
+    const cacheKey = `${supabaseUrl}::${supabaseKey}`;
+    let client = clientCache.get(cacheKey);
+    if (!client) {
+        // Use a unique storageKey so this client doesn't collide with a host
+        // app's Supabase client (which would also trigger the GoTrue warning).
+        client = createClient(supabaseUrl, supabaseKey, {
+            auth: {
+                persistSession: false,
+                autoRefreshToken: false,
+                detectSessionInUrl: false,
+                storageKey: 'bernstein-feedback-adapter-auth',
+            },
+        });
+        clientCache.set(cacheKey, client);
+    }
+    return client;
+}
 
 export interface SupabaseAdapterOptions {
     supabaseUrl: string;
@@ -51,9 +76,7 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
         };
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-        auth: { persistSession: false },
-    });
+    const supabase = getCachedClient(supabaseUrl, supabaseKey);
 
     /**
      * Uploads multiple base64 screenshots to Supabase Storage and returns URLs.

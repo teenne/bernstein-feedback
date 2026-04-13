@@ -143,9 +143,17 @@ export async function updateFeedbackStatus(id: string, status: string, resolutio
         const updates: any = { status };
         if (status === 'resolved' || status === 'closed') {
             updates.resolved_at = new Date().toISOString();
+            // Persist the note on the feedback row so the `on_feedback_resolved`
+            // Postgres trigger can read it and include it in the notification
+            // message. This keeps the trigger as the single source of truth
+            // for notification creation — no duplicate client-side insert.
+            if (resolutionNote !== undefined) {
+                updates.resolution_note = resolutionNote;
+            }
         } else {
             updates.resolved_at = null;
             updates.resolved_by = null;
+            updates.resolution_note = null;
         }
         if (resolutionNote !== undefined) updates.resolution_note = resolutionNote;
 
@@ -158,19 +166,11 @@ export async function updateFeedbackStatus(id: string, status: string, resolutio
 
         if (error) throw new Error(error.message);
 
-        // Create notification for the end user if resolving
-        if ((status === 'resolved' || status === 'closed') && data?.user_id) {
-            await supabase!
-                .from('notifications')
-                .insert({
-                    project_id: data.project_id,
-                    feedback_id: data.id,
-                    user_id: data.user_id,
-                    type: 'resolved',
-                    title: `Your feedback "${data.title}" has been resolved`,
-                    message: resolutionNote || null,
-                });
-        }
+        // NOTE: The resolve notification is NOT inserted here — it's
+        // produced by the Postgres trigger `on_feedback_resolved` which
+        // fires on status transitions into 'resolved'/'closed'. A previous
+        // version of this file inserted the notification client-side too,
+        // which caused every resolve to create TWO identical notifications.
 
         return data;
     }

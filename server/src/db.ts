@@ -11,8 +11,34 @@ const RETRY_DELAY = 2000;
 let useInMemory = false;
 const inMemoryStore: any[] = [];
 
-// PG Pool Setup — prefer DATABASE_URL (Render provides this), fall back to individual vars
-const pool = process.env.DATABASE_URL
+// PG Pool Setup — prefer DATABASE_URL (Render / Supabase / any host that
+// provides a connection string), fall back to individual vars for local dev.
+//
+// Placeholder URLs like `postgresql://user:<password>@host/db` (from a
+// copy-pasted template) are IGNORED so you can keep both DATABASE_URL and
+// DB_HOST set in your .env and toggle between "local dev" and "cloud"
+// just by filling in or clearing the DATABASE_URL value.
+function isPlaceholderUrl(url: string): boolean {
+  return /<[^>]*>/.test(url);
+}
+
+function hasValidDatabaseUrl(): boolean {
+  const url = process.env.DATABASE_URL;
+  if (!url || url.trim() === "") return false;
+  if (isPlaceholderUrl(url)) {
+    console.warn(
+      "⚠️  DATABASE_URL contains placeholder values (<...>) — ignoring it " +
+        "and falling back to DB_HOST/DB_USER/DB_PASSWORD. Replace the " +
+        "placeholders with real values to use the cloud database.",
+    );
+    return false;
+  }
+  return true;
+}
+
+const useConnectionString = hasValidDatabaseUrl();
+
+const pool = useConnectionString
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl:
@@ -25,8 +51,15 @@ const pool = process.env.DATABASE_URL
       user: process.env.DB_USER || "postgres",
       password: process.env.DB_PASSWORD || "postgres",
       database: process.env.DB_NAME || "postgres",
+      ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
       connectionTimeoutMillis: 5000,
     });
+
+console.info(
+  useConnectionString
+    ? "📡 Database mode: DATABASE_URL (cloud / Supabase / Render)"
+    : `📡 Database mode: local (${process.env.DB_HOST || "127.0.0.1"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "postgres"})`,
+);
 
 // Robust Connection Logic with Fallback
 export const connectWithRetry = async (): Promise<void> => {

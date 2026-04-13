@@ -30,9 +30,18 @@ export function Header({
   return (
     <header className="sticky top-0 z-50 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        <span className="text-lg font-bold tracking-tight">
-          Feedback Admin
-        </span>
+        {/* Brand lockup — logo + wordmark sit together on the left */}
+        <div className="flex items-center gap-2">
+          <img
+            src="/Logo.png"
+            alt="BERNSTEIN"
+            className="h-8 w-auto select-none"
+            draggable={false}
+          />
+          <span className="text-lg font-bold tracking-tight text-gray-900 dark:text-gray-100">
+            BERNSTEIN
+          </span>
+        </div>
         <div className="flex items-center gap-3">
           <nav className="flex items-center gap-1">
             {navItems.map(({ to, label }) => (

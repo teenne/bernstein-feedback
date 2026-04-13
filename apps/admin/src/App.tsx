@@ -128,13 +128,20 @@ export default function App() {
     const apiUrl = (
       import.meta.env.VITE_API_URL || "http://localhost:3000"
     ).replace(/\/$/, "");
+    // Derive the WebSocket URL from the HTTP URL.
+    // http://host:port → ws://host:port/api/notifications/ws
+    // https://host     → wss://host/api/notifications/ws
+    // When passed to httpAdapter, this enables realtime push of new
+    // notifications via the Node server — the hook skips its 30-second
+    // polling fallback and refetches on every WebSocket message instead.
+    const wsEndpoint = apiUrl.replace(/^http/, "ws") + "/api/notifications/ws";
 
     switch (rawConfig.adapterId) {
       case "supabase":
         if (supabaseUrl && supabaseKey) {
           return supabaseAdapter({ supabaseUrl, supabaseKey });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback` });
+        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
       case "console":
         return consoleAdapter();
       case "local":
@@ -143,7 +150,7 @@ export default function App() {
         if (supabaseUrl && supabaseKey) {
           return supabaseAdapter({ supabaseUrl, supabaseKey });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback` });
+        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
     }
   }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);
 

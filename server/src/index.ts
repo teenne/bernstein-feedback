@@ -1,7 +1,11 @@
+import http from 'node:http';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectWithRetry } from './db';
+import { startEmailWorker } from './workers/emailWorker';
+import { startPgListener } from './lib/pgListener';
+import { attachNotificationWs } from './lib/notificationsWs';
 
 // Route modules
 import authRoutes from './routes/auth';
@@ -35,11 +39,36 @@ app.use('/api/plans', planRoutes);
 app.use('/api', planRoutes);          // mounts /api/projects/:id/plan-status & /api/projects/:id/usage
 app.use('/health', healthRoutes);
 
+// Wrap the Express app in a plain http.Server so we can attach the
+// WebSocket upgrade handler on the same port. REST still works
+// identically; WebSockets piggy-back on the same HTTP listener via
+// the `Upgrade: websocket` handshake.
+const server = http.createServer(app);
+
 // Start server
 const startServer = async () => {
     await connectWithRetry();
-    app.listen(PORT as number, HOST, () => {
+
+    // Kick off the email worker. It polls email_queue every ~30s and
+    // sends any pending rows via SMTP. No-op (with a log line) when
+    // SMTP_USER / SMTP_PASS aren't configured.
+    startEmailWorker();
+
+    // Attach WebSocket endpoint at /api/notifications/ws.
+    // Admin apps pointed at this Node server use it instead of polling
+    // for instant bell updates. Apps pointed at Supabase continue to
+    // use Supabase Realtime exactly as before — this channel is purely
+    // additive.
+    attachNotificationWs(server);
+
+    // Start LISTENing on the `new_notification` Postgres channel so
+    // every INSERT into notifications gets pushed to any connected
+    // WebSocket clients subscribed to the matching (project, user).
+    startPgListener();
+
+    server.listen(PORT as number, HOST, () => {
         console.log(`Server is running on http://${HOST}:${PORT}`);
+        console.log(`WebSocket endpoint: ws://${HOST}:${PORT}/api/notifications/ws`);
     });
 };
 

@@ -25,6 +25,8 @@ services:
         fromDatabase:
           name: feedback-db
           property: connectionString
+      - key: JWT_SECRET
+        generateValue: true  # Render auto-generates a secure random string
       - key: ALLOWED_ORIGINS
         # Admin panel + all client apps that use the feedback widget
         # Update these URLs after deployment with actual Render URLs
@@ -48,3 +50,7 @@ services:
         sync: false  # Set manually
       - key: VITE_ADMIN_EMAILS
         sync: false  # Set manually
+      - key: VITE_SUPABASE_URL
+        sync: false  # Set manually (optional — enables Supabase auth)
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false  # Set manually (optional — enables Supabase auth)

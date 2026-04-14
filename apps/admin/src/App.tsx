@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   FeedbackProvider,
   FeedbackButton,
@@ -112,10 +112,16 @@ export default function App() {
   // Developer creates project manually from Admin Portal
   const [selectedPlan, setSelectedPlan] = useState<string>("free");
 
+  const navigate = useNavigate();
+
   const handlePlanSelected = (planId: string) => {
     setSelectedPlan(planId);
     sessionStorage.setItem(SESSION_KEYS.SELECTED_PLAN, planId);
     setShowPlanSelection(false);
+    // Land the user on the Admin Portal so they can create their first
+    // project immediately — matches the signup → create flow expected
+    // from both Free and Paid paths.
+    navigate('/admin');
   };
 
   // Build adapter based on raw settings

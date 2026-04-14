@@ -29,3 +29,12 @@ export const UpdateFeedbackStatusSchema = z.object({
     }),
     resolution_note: z.string().optional(),
 });
+
+/**
+ * Triage update (P3). Any subset of fields may be sent — all optional.
+ * Send via PATCH /api/feedback/:id/triage (see routes/feedback.ts).
+ */
+export const UpdateFeedbackTriageSchema = z.object({
+    labels: z.array(z.string().min(1).max(40)).max(20).optional(),
+    priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable().optional(),
+});

@@ -10,6 +10,8 @@ export interface Project {
     created_at: string;
 }
 
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'urgent';
+
 export interface FeedbackItem {
     id: string;
     project_id: string;
@@ -24,6 +26,9 @@ export interface FeedbackItem {
     screenshots: string | string[] | null;
     status: string | null;
     resolved_at: string | null;
+    // Triage fields (P3)
+    labels?: string[] | null;
+    priority?: FeedbackPriority | null;
     created_at: string;
 }
 

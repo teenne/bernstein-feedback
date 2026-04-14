@@ -19,17 +19,18 @@ async function getCurrentUserId(): Promise<string | null> {
     return null;
 }
 
-export async function fetchFeedbackList(filters: { type?: string; project_id?: string; status?: string; limit?: number }) {
+export async function fetchFeedbackList(filters: { type?: string; project_id?: string; status?: string; priority?: string; limit?: number }) {
     if (useSupabaseDirectly) {
         let query = supabase!
             .from('feedback')
-            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, created_at')
+            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, created_at')
             .order('created_at', { ascending: false })
             .limit(filters.limit || 100);
 
         if (filters.type) query = query.eq('type', filters.type);
         if (filters.project_id) query = query.eq('project_id', filters.project_id);
         if (filters.status) query = query.eq('status', filters.status);
+        if (filters.priority) query = query.eq('priority', filters.priority);
 
         const { data, error } = await query;
         if (error) throw new Error(error.message);
@@ -40,6 +41,7 @@ export async function fetchFeedbackList(filters: { type?: string; project_id?: s
     if (filters.type) params.set('type', filters.type);
     if (filters.project_id) params.set('project_id', filters.project_id);
     if (filters.status) params.set('status', filters.status);
+    if (filters.priority) params.set('priority', filters.priority);
     params.set('limit', String(filters.limit || 100));
 
     const json = await apiFetch(`${API_URL}/api/feedback?${params}`);
@@ -179,6 +181,120 @@ export async function updateFeedbackStatus(id: string, status: string, resolutio
         method: 'PATCH',
         body: JSON.stringify({ status, resolution_note: resolutionNote }),
     });
+    return json.data;
+}
+
+/**
+ * Update triage fields on a feedback row (labels, priority).
+ * Both arguments are optional — pass only the ones you want to change.
+ * `priority: null` explicitly clears the priority.
+ * (P3) Matches /api/feedback/:id/triage on the server.
+ */
+export async function updateFeedbackTriage(
+    id: string,
+    patch: { labels?: string[]; priority?: 'low' | 'medium' | 'high' | 'urgent' | null },
+) {
+    if (useSupabaseDirectly) {
+        const updates: Record<string, unknown> = {};
+        if (patch.labels !== undefined) updates.labels = patch.labels;
+        if (patch.priority !== undefined) updates.priority = patch.priority;
+        if (Object.keys(updates).length === 0) return null;
+
+        const { data, error } = await supabase!
+            .from('feedback')
+            .update(updates)
+            .eq('id', id)
+            .select('id, labels, priority')
+            .single();
+        if (error) throw new Error(error.message);
+        return data;
+    }
+
+    const json = await apiFetch(`${API_URL}/api/feedback/${id}/triage`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+    });
+    return json.data;
+}
+
+export interface LoopHealthData {
+    project_id: string | null;
+    metrics: {
+        avg_resolution_hours: number | null;
+        pct_closed_14d: number | null;
+        return_rate: number | null;
+    };
+    status: {
+        avg_resolution: 'green' | 'amber' | 'red' | 'unknown';
+        pct_closed_14d: 'green' | 'amber' | 'red' | 'unknown';
+        return_rate: 'green' | 'amber' | 'red' | 'unknown';
+        overall: 'green' | 'amber' | 'red' | 'unknown';
+    };
+    counts: {
+        total_30d: number;
+        resolved_30d: number;
+        unique_submitters_90d: number;
+        returning_submitters_90d: number;
+    };
+}
+
+/**
+ * (P4) Fetch feedback loop health metrics for a project (or global if projectId is null).
+ * Supabase path calls the SQL function directly via rpc(); Node path hits the endpoint.
+ */
+export async function fetchLoopHealth(projectId: string | null): Promise<LoopHealthData> {
+    if (useSupabaseDirectly) {
+        const { data, error } = await supabase!.rpc('feedback_loop_health', {
+            p_project_id: projectId,
+        });
+        if (error) throw new Error(error.message);
+        const row = (data && data[0]) || {};
+        const avgHours = row.avg_resolution_hours != null ? Number(row.avg_resolution_hours) : null;
+        const pctClosed = row.pct_closed_14d != null ? Number(row.pct_closed_14d) : null;
+        const returnRate = row.return_rate != null ? Number(row.return_rate) : null;
+
+        // Same traffic-light logic as the Node route. Kept in sync here
+        // so the Supabase path has identical semantics.
+        const statusFor = (v: number | null, good: number, warn: number, higherIsBetter: boolean):
+            'green' | 'amber' | 'red' | 'unknown' => {
+            if (v == null) return 'unknown';
+            return higherIsBetter
+                ? (v >= good ? 'green' : v >= warn ? 'amber' : 'red')
+                : (v <= good ? 'green' : v <= warn ? 'amber' : 'red');
+        };
+        const avgHoursStatus = statusFor(avgHours, 48, 168, false);
+        const pctClosedStatus = statusFor(pctClosed, 80, 50, true);
+        const returnRateStatus = statusFor(returnRate, 40, 15, true);
+        const rank = (s: string) => ({ unknown: -1, green: 0, amber: 1, red: 2 }[s] ?? -1);
+        const overall = [avgHoursStatus, pctClosedStatus, returnRateStatus].reduce(
+            (worst, s) => (rank(s) > rank(worst) ? s : worst),
+            'green' as 'green' | 'amber' | 'red' | 'unknown',
+        );
+
+        return {
+            project_id: projectId,
+            metrics: {
+                avg_resolution_hours: avgHours,
+                pct_closed_14d: pctClosed,
+                return_rate: returnRate,
+            },
+            status: {
+                avg_resolution: avgHoursStatus,
+                pct_closed_14d: pctClosedStatus,
+                return_rate: returnRateStatus,
+                overall,
+            },
+            counts: {
+                total_30d: Number(row.total_30d || 0),
+                resolved_30d: Number(row.resolved_30d || 0),
+                unique_submitters_90d: Number(row.unique_submitters_90d || 0),
+                returning_submitters_90d: Number(row.returning_submitters_90d || 0),
+            },
+        };
+    }
+
+    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    const json = await apiFetch(`${API_URL}/api/feedback/stats/loop-health${params}`);
     return json.data;
 }
 

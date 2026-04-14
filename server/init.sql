@@ -183,6 +183,12 @@ CREATE TABLE feedback (
   resolved_by TEXT,
   resolution_note TEXT,
 
+  -- Triage fields (P3) — free-form labels + bounded priority enum.
+  -- Labels are array of short strings ("backend", "duplicate", "ux-bug").
+  -- Priority is optional; NULL means not prioritised yet.
+  labels TEXT[] NOT NULL DEFAULT '{}',
+  priority TEXT CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -257,6 +263,8 @@ CREATE INDEX idx_email_queue_pending
 -- Indexes
 CREATE INDEX idx_feedback_project ON feedback(project_id);
 CREATE INDEX idx_feedback_status ON feedback(status);
+CREATE INDEX idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
+CREATE INDEX idx_feedback_labels ON feedback USING GIN (labels);
 CREATE INDEX idx_feedback_type ON feedback(type);
 CREATE INDEX idx_feedback_created ON feedback(created_at DESC);
 CREATE INDEX idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
@@ -545,6 +553,79 @@ DROP TRIGGER IF EXISTS on_notification_pg_notify ON public.notifications;
 CREATE TRIGGER on_notification_pg_notify
   AFTER INSERT ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.notify_new_notification();
+
+-- ============================================================
+-- P4: Feedback loop health — three metrics computed per project.
+-- Used by the admin dashboard's "Loop Health" card to show a
+-- green/amber/red status at a glance.
+--
+-- Metrics:
+--   • avg_resolution_hours: mean time from submission → resolved_at
+--     (for feedback resolved/closed in the last 30 days)
+--   • pct_closed_14d: of feedback created in the last 30 days, what
+--     percentage has been resolved/closed within 14 days of creation
+--   • return_rate: fraction of unique submitters who have submitted
+--     more than once in the last 90 days (measures "do users come back
+--     after the loop closes?")
+--
+-- Returns a single row. Pass NULL for p_project_id to get global stats.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.feedback_loop_health(p_project_id TEXT DEFAULT NULL)
+RETURNS TABLE (
+  avg_resolution_hours NUMERIC,
+  pct_closed_14d       NUMERIC,
+  return_rate          NUMERIC,
+  total_30d            BIGINT,
+  resolved_30d         BIGINT,
+  unique_submitters_90d BIGINT,
+  returning_submitters_90d BIGINT
+) AS $$
+  WITH recent AS (
+    SELECT *
+      FROM public.feedback
+     WHERE (p_project_id IS NULL OR project_id = p_project_id)
+       AND created_at > NOW() - INTERVAL '30 days'
+  ),
+  recent_resolved AS (
+    SELECT *
+      FROM recent
+     WHERE status IN ('resolved', 'closed')
+       AND resolved_at IS NOT NULL
+  ),
+  submitters AS (
+    -- Unique submitters in the last 90 days, with submission count
+    SELECT user_id, COUNT(*) AS n
+      FROM public.feedback
+     WHERE (p_project_id IS NULL OR project_id = p_project_id)
+       AND created_at > NOW() - INTERVAL '90 days'
+       AND user_id IS NOT NULL
+       AND user_id <> ''
+     GROUP BY user_id
+  )
+  SELECT
+    -- Mean resolution time in hours (NULL if nothing resolved)
+    (SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600.0)
+       FROM recent_resolved)                                                AS avg_resolution_hours,
+    -- % of recent submissions resolved within 14 days of creation
+    (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
+                 ELSE ROUND(100.0 * SUM(CASE
+                     WHEN status IN ('resolved','closed')
+                      AND resolved_at IS NOT NULL
+                      AND (resolved_at - created_at) <= INTERVAL '14 days'
+                     THEN 1 ELSE 0 END) / COUNT(*), 1)
+            END
+       FROM recent)                                                         AS pct_closed_14d,
+    -- % of distinct submitters who submitted more than once
+    (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
+                 ELSE ROUND(100.0 * SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END)
+                              / COUNT(*), 1)
+            END
+       FROM submitters)                                                     AS return_rate,
+    (SELECT COUNT(*) FROM recent)::BIGINT                                    AS total_30d,
+    (SELECT COUNT(*) FROM recent_resolved)::BIGINT                           AS resolved_30d,
+    (SELECT COUNT(*) FROM submitters)::BIGINT                                AS unique_submitters_90d,
+    (SELECT COUNT(*) FROM submitters WHERE n > 1)::BIGINT                    AS returning_submitters_90d;
+$$ LANGUAGE sql STABLE;
 
 -- Verify
 SELECT 'Feedback tables created successfully' as status;

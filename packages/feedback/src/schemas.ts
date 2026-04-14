@@ -271,6 +271,14 @@ export interface FeedbackConfig {
   /** Duration to show toast in ms (default: 5000, set to 0 to disable auto-dismiss) */
   toastDuration?: number;
 
+  /**
+   * Automatically take a screenshot of the page when the feedback dialog
+   * opens (default: true). The dialog is hidden during capture so it
+   * doesn't appear in the shot. Users can then retake or remove it.
+   * Set to false for privacy-sensitive pages.
+   */
+  autoScreenshot?: boolean;
+
 
 
   /** Show Branding (Powered by Bernstein) */

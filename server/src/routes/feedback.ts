@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db';
 import { requireAuth, getFreshRole, getUserProjectIds, JwtPayload } from '../middleware/auth';
-import { FeedbackSchema, UpdateFeedbackStatusSchema } from '../schemas/feedback';
+import { FeedbackSchema, UpdateFeedbackStatusSchema, UpdateFeedbackTriageSchema } from '../schemas/feedback';
 import { getProjectPlanStatus, notifyLimitReached, incrementUsageCount } from '../helpers/plan';
 import { Feedback, Project } from '../schemas/tables';
 
@@ -106,9 +106,9 @@ router.post('/', async (req, res) => {
 router.get('/', requireAuth, async (req, res) => {
     try {
         const user = (req as any).user as JwtPayload;
-        const { project_id, type, status, severity, limit = '50', offset = '0' } = req.query;
+        const { project_id, type, status, severity, priority, limit = '50', offset = '0' } = req.query;
 
-        let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, created_at FROM feedback';
+        let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, created_at FROM feedback';
         const conditions: string[] = [];
         const values: any[] = [];
         let paramIndex = 1;
@@ -128,6 +128,7 @@ router.get('/', requireAuth, async (req, res) => {
         if (type) { conditions.push(`type = $${paramIndex++}`); values.push(type); }
         if (status) { conditions.push(`status = $${paramIndex++}`); values.push(status); }
         if (severity) { conditions.push(`severity = $${paramIndex++}`); values.push(severity); }
+        if (priority) { conditions.push(`priority = $${paramIndex++}`); values.push(priority); }
 
         if (conditions.length > 0) sql += ' WHERE ' + conditions.join(' AND ');
         sql += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
@@ -184,6 +185,101 @@ router.get('/stats/summary', requireAuth, async (req, res) => {
                 by_type: Object.fromEntries(byType.rows.map((r) => [r.type, parseInt(r.count)])),
                 by_severity: Object.fromEntries(bySeverity.rows.map((r) => [r.severity, parseInt(r.count)])),
             }
+        });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// P4: Feedback loop health metrics for the admin dashboard card.
+// Delegates to the feedback_loop_health SQL function so the arithmetic
+// lives in one place (and can be reused by BI tools). Computes per
+// ?project_id=X, or globally if omitted.
+router.get('/stats/loop-health', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const projectId = typeof req.query.project_id === 'string' ? req.query.project_id : null;
+
+        // Non-admins can only query their own projects.
+        const role = await getFreshRole(user.user_id, user.role);
+        if (role !== 'admin') {
+            if (!projectId) {
+                res.status(400).json({ success: false, error: 'project_id is required for non-admin users' });
+                return;
+            }
+            const projectIds = await getUserProjectIds(user.user_id);
+            if (!projectIds.includes(projectId)) {
+                res.status(403).json({ success: false, error: 'Forbidden' });
+                return;
+            }
+        }
+
+        const result = await query<{
+            avg_resolution_hours: string | null;
+            pct_closed_14d: string | null;
+            return_rate: string | null;
+            total_30d: string;
+            resolved_30d: string;
+            unique_submitters_90d: string;
+            returning_submitters_90d: string;
+        }>(`SELECT * FROM feedback_loop_health($1)`, [projectId]);
+
+        const row = result.rows[0] || {} as any;
+        const avgHours = row.avg_resolution_hours != null ? parseFloat(row.avg_resolution_hours) : null;
+        const pctClosed = row.pct_closed_14d != null ? parseFloat(row.pct_closed_14d) : null;
+        const returnRate = row.return_rate != null ? parseFloat(row.return_rate) : null;
+
+        // Traffic-light thresholds (the spec calls for green/amber/red).
+        const statusFor = (
+            value: number | null,
+            good: number,
+            warn: number,
+            higherIsBetter: boolean,
+        ): 'green' | 'amber' | 'red' | 'unknown' => {
+            if (value == null) return 'unknown';
+            if (higherIsBetter) {
+                if (value >= good) return 'green';
+                if (value >= warn) return 'amber';
+                return 'red';
+            } else {
+                if (value <= good) return 'green';
+                if (value <= warn) return 'amber';
+                return 'red';
+            }
+        };
+
+        const avgHoursStatus = statusFor(avgHours, 48, 168, false); // green ≤ 48h, amber ≤ 7d, red > 7d
+        const pctClosedStatus = statusFor(pctClosed, 80, 50, true); // green ≥ 80%, amber ≥ 50%
+        const returnRateStatus = statusFor(returnRate, 40, 15, true); // green ≥ 40%, amber ≥ 15%
+
+        // Overall is the worst of the three (red > amber > green).
+        const rank = (s: string) => ({ unknown: -1, green: 0, amber: 1, red: 2 }[s] ?? -1);
+        const overall = [avgHoursStatus, pctClosedStatus, returnRateStatus].reduce((worst, s) =>
+            rank(s) > rank(worst) ? s : worst, 'green' as const);
+
+        res.json({
+            success: true,
+            data: {
+                project_id: projectId,
+                metrics: {
+                    avg_resolution_hours: avgHours,
+                    pct_closed_14d: pctClosed,
+                    return_rate: returnRate,
+                },
+                status: {
+                    avg_resolution: avgHoursStatus,
+                    pct_closed_14d: pctClosedStatus,
+                    return_rate: returnRateStatus,
+                    overall,
+                },
+                counts: {
+                    total_30d: parseInt(row.total_30d || '0'),
+                    resolved_30d: parseInt(row.resolved_30d || '0'),
+                    unique_submitters_90d: parseInt(row.unique_submitters_90d || '0'),
+                    returning_submitters_90d: parseInt(row.returning_submitters_90d || '0'),
+                },
+            },
         });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -265,6 +361,56 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
         // what happened in the earlier version of this handler.
 
         res.json({ success: true, data: feedback });
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+        } else {
+            const msg = error instanceof Error ? error.message : String(error);
+            res.status(500).json({ success: false, error: msg });
+        }
+    }
+});
+
+// Update feedback triage fields (P3) — labels and/or priority.
+// Send any subset; fields not included in the body are untouched.
+// Examples:
+//   PATCH /api/feedback/<id>/triage  { "priority": "high" }
+//   PATCH /api/feedback/<id>/triage  { "labels": ["backend", "duplicate"] }
+//   PATCH /api/feedback/<id>/triage  { "priority": null }   // clear
+router.patch('/:id/triage', requireAuth, async (req, res) => {
+    try {
+        const data = UpdateFeedbackTriageSchema.parse(req.body);
+
+        const sets: string[] = [];
+        const values: any[] = [];
+        let i = 1;
+
+        if (data.labels !== undefined) {
+            sets.push(`labels = $${i++}`);
+            values.push(data.labels);
+        }
+        if (data.priority !== undefined) {
+            sets.push(`priority = $${i++}`);
+            values.push(data.priority);
+        }
+
+        if (sets.length === 0) {
+            res.status(400).json({ success: false, error: 'No triage fields provided' });
+            return;
+        }
+
+        values.push(req.params.id);
+        const result = await query<{ id: string; labels: string[]; priority: string | null }>(
+            `UPDATE feedback SET ${sets.join(', ')} WHERE id = $${i} RETURNING id, labels, priority`,
+            values,
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ success: false, error: 'Feedback not found' });
+            return;
+        }
+
+        res.json({ success: true, data: result.rows[0] });
     } catch (error) {
         if (error instanceof z.ZodError) {
             res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });

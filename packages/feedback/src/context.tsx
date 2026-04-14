@@ -245,16 +245,10 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       const adapterAny = config.adapter as any;
       let resolved = false;
 
-      // Path 1: Try HTTP endpoint first (most reliable — server has authoritative data)
-      const baseUrl = adapterAny?.baseUrl || (adapterAny?.endpoint
-        ? adapterAny.endpoint.replace(/\/api\/feedback\/?$/, '')
-        : null);
-      const httpUrl = config.planCheckEndpoint
-        || (baseUrl ? `${baseUrl}/api/projects/${config.projectId}/plan-status` : null);
-
-      if (httpUrl) {
+      // Path 1: explicit override always wins.
+      if (config.planCheckEndpoint) {
         try {
-          const response = await fetch(httpUrl);
+          const response = await fetch(config.planCheckEndpoint);
           if (response.ok) {
             const json = await response.json();
             if (json.success && json.data) {
@@ -264,20 +258,48 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
             }
           }
         } catch {
-          // HTTP endpoint unavailable, try adapter path
+          // fall through to adapter/HTTP fallback
         }
       }
 
-      // Path 2: Adapter getPlanStatus (Supabase direct — fallback when no HTTP server)
+      // Path 2: adapter.getPlanStatus() — Supabase mode exposes this.
+      // MUST run before the baseUrl HTTP fallback because autoAdapter
+      // always exposes baseUrl (the local Node server URL) even when
+      // it's actually routing submissions to Supabase. Hitting baseUrl
+      // first sent plan-status to localhost in production while feedback
+      // was going to Supabase — the bug this ordering fixes.
       if (!resolved && typeof adapterAny?.getPlanStatus === 'function') {
         try {
           const status = await adapterAny.getPlanStatus(config.projectId);
           if (status) {
             setPlanStatus(status);
             setIsLimitReached(!status.can_submit);
+            resolved = true;
           }
         } catch {
-          // Adapter query failed too — allow submissions
+          // fall through to HTTP
+        }
+      }
+
+      // Path 3: baseUrl-derived HTTP fallback for local-only deployments
+      // where the adapter has no getPlanStatus (plain http adapter).
+      if (!resolved) {
+        const baseUrl = adapterAny?.baseUrl || (adapterAny?.endpoint
+          ? adapterAny.endpoint.replace(/\/api\/feedback\/?$/, '')
+          : null);
+        if (baseUrl) {
+          try {
+            const response = await fetch(`${baseUrl}/api/projects/${config.projectId}/plan-status`);
+            if (response.ok) {
+              const json = await response.json();
+              if (json.success && json.data) {
+                setPlanStatus(json.data);
+                setIsLimitReached(!json.data.can_submit);
+              }
+            }
+          } catch {
+            // allow submissions if we can't reach anything
+          }
         }
       }
     } catch {

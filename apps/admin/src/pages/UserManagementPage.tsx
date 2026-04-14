@@ -1,27 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { API_URL, useSupabaseDirectly, getAuthHeaders } from '../lib/config';
 import { GlassCard } from '../components/GlassCard';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useAuth } from '../hooks/useAuth';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
-
-function getAuthHeaders(): Record<string, string> {
-    const token = sessionStorage.getItem('feedback_token');
-    if (token) return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-    return { 'Content-Type': 'application/json' };
-}
-
-interface UserRole {
-    id: string;
-    user_id: string;
-    email: string;
-    role: 'admin' | 'user';
-    created_at: string;
-    updated_at: string;
-}
+import type { UserRole } from '../lib/types';
 
 export default function UserManagementPage() {
     const [users, setUsers] = useState<UserRole[]>([]);
@@ -55,13 +39,23 @@ export default function UserManagementPage() {
         fetchUsers();
     }, []);
 
+    // Main admin is the first registered user (sorted by created_at ASC from server)
+    const mainAdminId = users.length > 0 ? users[0].user_id : null;
+
     const handleToggleRole = (user: UserRole) => {
+        // Block changing main admin's role
+        if (user.user_id === mainAdminId && user.role === 'admin') {
+            alert('Cannot change the main admin role. This is the account owner.');
+            return;
+        }
+
         const newRole = user.role === 'admin' ? 'user' : 'admin';
 
-        if (newRole === 'user' && user.user_id === userId) {
-            const adminCount = users.filter(u => u.role === 'admin').length;
-            if (adminCount <= 1) {
-                alert('Cannot demote: you are the last admin.');
+        // Block demoting ANY admin if they're the last one
+        if (newRole === 'user' && user.role === 'admin') {
+            const currentAdminCount = users.filter(u => u.role === 'admin').length;
+            if (currentAdminCount <= 1) {
+                alert('Cannot remove the last admin. Promote another user to admin first.');
                 return;
             }
         }
@@ -75,7 +69,29 @@ export default function UserManagementPage() {
         setConfirmDialog(null);
         setUpdating(user.user_id);
         try {
+            // Double-check last admin protection before any update
+            if (newRole === 'user' && user.role === 'admin') {
+                const currentAdmins = users.filter(u => u.role === 'admin').length;
+                if (currentAdmins <= 1) {
+                    alert('Cannot remove the last admin. Promote another user to admin first.');
+                    setUpdating(null);
+                    return;
+                }
+            }
+
             if (useSupabaseDirectly) {
+                // Supabase: verify admin count from DB before updating
+                const { count } = await supabase!
+                    .from('user_roles')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('role', 'admin');
+
+                if (newRole === 'user' && user.role === 'admin' && (count ?? 0) <= 1) {
+                    alert('Cannot remove the last admin. Promote another user to admin first.');
+                    setUpdating(null);
+                    return;
+                }
+
                 const { error } = await supabase!
                     .from('user_roles')
                     .update({ role: newRole, updated_at: new Date().toISOString() })
@@ -137,7 +153,8 @@ export default function UserManagementPage() {
                         <div className="divide-y divide-gray-100 dark:divide-white/5">
                             {users.map((user) => {
                                 const isSelf = user.user_id === userId;
-                                const isLastAdmin = user.role === 'admin' && adminCount <= 1 && isSelf;
+                                const isMainAdmin = user.user_id === mainAdminId;
+                                const isLastAdmin = (user.role === 'admin' && adminCount <= 1) || isMainAdmin;
 
                                 return (
                                     <div
@@ -164,18 +181,20 @@ export default function UserManagementPage() {
                                         <button
                                             onClick={() => handleToggleRole(user)}
                                             disabled={updating === user.user_id || isLastAdmin}
-                                            title={isLastAdmin ? 'Cannot demote: last admin' : `Click to make ${user.role === 'admin' ? 'user' : 'admin'}`}
+                                            title={isMainAdmin ? 'Account owner — cannot change role' : isLastAdmin ? 'Cannot demote: last admin' : `Click to make ${user.role === 'admin' ? 'user' : 'admin'}`}
                                             className={`
                                                 px-3 py-1 rounded-full text-[11px] font-bold tracking-tight border transition-all
                                                 ${updating === user.user_id ? 'opacity-50 cursor-wait' : ''}
                                                 ${isLastAdmin ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-105'}
-                                                ${user.role === 'admin'
-                                                    ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20'
-                                                    : 'bg-blue-500/10 text-blue-500 border-blue-500/20 hover:bg-blue-500/20'
+                                                ${isMainAdmin
+                                                    ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                                                    : user.role === 'admin'
+                                                        ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20'
+                                                        : 'bg-blue-500/10 text-blue-500 border-blue-500/20 hover:bg-blue-500/20'
                                                 }
                                             `}
                                         >
-                                            {updating === user.user_id ? '...' : user.role.toUpperCase()}
+                                            {updating === user.user_id ? '...' : isMainAdmin ? 'OWNER' : user.role.toUpperCase()}
                                         </button>
                                     </div>
                                 );

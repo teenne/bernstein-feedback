@@ -1,6 +1,9 @@
+import { useState, useEffect } from "react";
 import { FeedbackConfigState } from "../hooks/useFeedbackConfig";
 import { GlassCard } from "../components/GlassCard";
 import { LayoutWrapper } from "../components/LayoutWrapper";
+import { fetchProjectUsage } from "../lib/feedbackApi";
+import { useFeedback } from "akk-feedback";
 
 interface SettingsPageProps {
   config: FeedbackConfigState;
@@ -35,6 +38,15 @@ export function SettingsPage({
   isAdmin = false,
   activeProjectId,
 }: SettingsPageProps) {
+  const [usage, setUsage] = useState<{ plan: string; tickets_used: number; tickets_limit: number; percentage_used: number; month: string; history: any[] } | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const { lastReportId } = useFeedback();
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    fetchProjectUsage(activeProjectId).then(setUsage).catch(() => {});
+  }, [activeProjectId, lastReportId]);
+
   if (!activeProjectId) {
     return (
       <LayoutWrapper>
@@ -115,7 +127,10 @@ export function SettingsPage({
                 </div>
 
                 {!isPro && !loading && (
-                  <button className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-amber-900/20 transition-all hover:-translate-y-0.5 active:translate-y-0">
+                  <button
+                    onClick={() => setShowUpgradeModal(true)}
+                    className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-amber-900/20 transition-all hover:-translate-y-0.5 active:translate-y-0"
+                  >
                     Upgrade to Pro
                   </button>
                 )}
@@ -127,11 +142,51 @@ export function SettingsPage({
               )}
             </GlassCard>
 
-            {/* Behavior Settings */}
-            {/* 
-                            Note: Screenshot feature has been removed at the request of the user.
-                            Future behavior settings (e.g., auto-open, cooldowns) can be added here.
-                        */}
+            {/* Plan Usage Card */}
+            {usage && (
+              <GlassCard className="border-l-4 border-l-blue-500">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Plan Usage</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{usage.month}</p>
+                  </div>
+                  <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
+                    usage.plan === 'pro'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
+                  }`}>
+                    {usage.tickets_limit} tickets/month
+                  </span>
+                </div>
+                <div className="flex items-end gap-3 mb-3">
+                  <span className="text-3xl font-bold text-gray-900 dark:text-white">{usage.tickets_used}</span>
+                  <span className="text-sm text-gray-400 dark:text-gray-500 mb-1">/ {usage.tickets_limit}</span>
+                </div>
+                <div className="h-3 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${
+                      usage.percentage_used >= 90
+                        ? 'bg-red-500'
+                        : usage.percentage_used >= 70
+                          ? 'bg-amber-500'
+                          : 'bg-blue-500'
+                    }`}
+                    style={{ width: `${Math.min(usage.percentage_used, 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between mt-2">
+                  <span className="text-xs text-gray-400">{usage.percentage_used}% used</span>
+                  {usage.percentage_used >= 80 && !isPro && (
+                    <button className="text-xs text-amber-600 dark:text-amber-400 font-semibold hover:underline">
+                      Upgrade plan
+                    </button>
+                  )}
+                  {usage.percentage_used >= 100 && (
+                    <span className="text-xs text-red-500 font-semibold">Limit reached — submissions paused</span>
+                  )}
+                </div>
+              </GlassCard>
+            )}
 
             {/* Adapter Settings */}
             <GlassCard
@@ -421,6 +476,54 @@ export function SettingsPage({
               }}
             />
           </GlassCard>
+        </div>
+      )}
+
+      {/* Upgrade Modal */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8 relative animate-in fade-in zoom-in-95 duration-200">
+            <button
+              onClick={() => setShowUpgradeModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+            <div className="text-center">
+              <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-4">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Upgrade to Pro</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                Unlock higher ticket limits, multiple projects, AI clustering, PostHog integration, and more.
+              </p>
+              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 mb-6 text-left space-y-2">
+                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <span className="text-emerald-500">&#10003;</span> 5,000 tickets/month
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <span className="text-emerald-500">&#10003;</span> Up to 10 projects
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <span className="text-emerald-500">&#10003;</span> AI ticket clustering
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <span className="text-emerald-500">&#10003;</span> PostHog session replay
+                </div>
+              </div>
+              <a
+                href="mailto:support@bernstein.ai?subject=Upgrade to Pro&body=Hi, I'd like to upgrade project: ${activeProjectId}"
+                className="block w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg transition-all text-center"
+              >
+                Contact Us to Upgrade
+              </a>
+              <p className="text-xs text-gray-400 mt-3">We'll get back to you within 24 hours.</p>
+            </div>
+          </div>
         </div>
       )}
     </LayoutWrapper>

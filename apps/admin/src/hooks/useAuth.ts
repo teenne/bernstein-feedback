@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
+import { API_URL, useSupabaseDirectly, SESSION_KEYS } from '../lib/config';
 
 interface AuthState {
     isLoggedIn: boolean;
@@ -32,24 +30,51 @@ export function useAuth(): AuthState {
     const [sessionUser, setSessionUser] = useState<{ id: string; email: string } | null>(null);
     const roleResolved = useRef(false);
 
-    // Read local session from sessionStorage
-    const readLocalSession = () => {
-        const stored = sessionStorage.getItem('feedback_local_user');
-        const token = sessionStorage.getItem('feedback_token');
+    // Read local session from sessionStorage, then verify role from server
+    const readLocalSession = async () => {
+        const stored = sessionStorage.getItem(SESSION_KEYS.LOCAL_USER);
+        const token = sessionStorage.getItem(SESSION_KEYS.TOKEN);
         if (stored && token) {
             try {
-                const { user_id, email, role } = JSON.parse(stored);
-                if (user_id && email && role) {
-                    roleResolved.current = true;
-                    setState({
-                        isLoggedIn: true,
-                        isAdmin: role === 'admin',
-                        role,
-                        email,
-                        userId: user_id,
-                        loading: false,
-                    });
+                const { user_id, email } = JSON.parse(stored);
+                if (user_id && email) {
                     setSessionUser({ id: user_id, email });
+
+                    // Always verify current role from server (don't trust cached role)
+                    try {
+                        const res = await fetch(`${API_URL}/api/auth/me`, {
+                            headers: { 'Authorization': `Bearer ${token}` },
+                        });
+                        const json = await res.json();
+                        const freshRole = json.success ? (json.data.role || 'user') : 'user';
+
+                        // Update cached session with fresh role
+                        sessionStorage.setItem(SESSION_KEYS.LOCAL_USER, JSON.stringify({
+                            user_id, email, role: freshRole,
+                        }));
+
+                        roleResolved.current = true;
+                        setState({
+                            isLoggedIn: true,
+                            isAdmin: freshRole === 'admin',
+                            role: freshRole,
+                            email,
+                            userId: user_id,
+                            loading: false,
+                        });
+                    } catch {
+                        // Server unavailable — fall back to cached role
+                        const { role } = JSON.parse(stored);
+                        roleResolved.current = true;
+                        setState({
+                            isLoggedIn: true,
+                            isAdmin: role === 'admin',
+                            role,
+                            email,
+                            userId: user_id,
+                            loading: false,
+                        });
+                    }
                     return;
                 }
             } catch {}
@@ -144,7 +169,7 @@ export function useAuth(): AuthState {
                     }
                 } else {
                     // Node server: verify token with /api/auth/me
-                    const token = sessionStorage.getItem('feedback_token');
+                    const token = sessionStorage.getItem(SESSION_KEYS.TOKEN);
                     if (token) {
                         const res = await fetch(`${API_URL}/api/auth/me`, {
                             headers: { 'Authorization': `Bearer ${token}` },

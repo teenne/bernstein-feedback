@@ -86,18 +86,10 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
         }
     }, []);
 
-    const enforcedConfig = useMemo(() => {
-        if (isPro) return config;
-        return {
-            ...config,
-            themeColor: '#f59e0b',
-            showBranding: true,
-            maxConsoleErrors: 10,
-            maxNetworkErrors: 5,
-            maxBreadcrumbs: 20,
-            toastDuration: 5000,
-        };
-    }, [config, isPro]);
+    // Plan limits are now usage-based (ticket count per month), not cosmetic.
+    // All UI features (theme, branding, adapters) available on all plans.
+    // Pro gates: higher ticket limits, AI clustering, PostHog, etc.
+    const enforcedConfig = useMemo(() => config, [config]);
 
     const updateSetting = useCallback(<K extends keyof FeedbackConfigState>(key: K, value: FeedbackConfigState[K]) => {
         setConfig(prev => {

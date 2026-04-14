@@ -4,49 +4,10 @@ import { fetchFeedbackList, fetchUserProjectIds, fetchProjects } from '../lib/fe
 import { useAuth } from '../hooks/useAuth';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
-// GlassCard used for empty state and table wrapper
-
-interface FeedbackItem {
-    id: string;
-    project_id: string;
-    type: string;
-    title: string;
-    description: string;
-    severity: string | null;
-    impact: string | null;
-    screen_id: string | null;
-    user_id: string | null;
-    screenshots: string | string[] | null;
-    created_at: string;
-}
-
-const TYPE_CONFIG: Record<string, { label: string; color: string; darkColor: string; icon: string }> = {
-    feedback: {
-        label: 'Feedback',
-        color: 'bg-blue-50 text-blue-700 border-blue-200',
-        darkColor: 'dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20',
-        icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z',
-    },
-    bug_report: {
-        label: 'Bug',
-        color: 'bg-red-50 text-red-700 border-red-200',
-        darkColor: 'dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20',
-        icon: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z',
-    },
-    feature_request: {
-        label: 'Feature',
-        color: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-        darkColor: 'dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20',
-        icon: 'M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18',
-    },
-};
-
-const SEVERITY_CONFIG: Record<string, { color: string; darkColor: string }> = {
-    critical: { color: 'bg-red-100 text-red-800', darkColor: 'dark:bg-red-500/10 dark:text-red-400' },
-    high: { color: 'bg-orange-100 text-orange-800', darkColor: 'dark:bg-orange-500/10 dark:text-orange-400' },
-    medium: { color: 'bg-yellow-100 text-yellow-800', darkColor: 'dark:bg-yellow-500/10 dark:text-yellow-400' },
-    low: { color: 'bg-gray-100 text-gray-600', darkColor: 'dark:bg-gray-500/10 dark:text-gray-400' },
-};
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { STATUS_CONFIG, TYPE_CONFIG, SEVERITY_CONFIG } from '../lib/constants';
+import type { FeedbackItem } from '../lib/types';
 
 export function FeedbackListPage() {
     const navigate = useNavigate();
@@ -58,6 +19,7 @@ export function FeedbackListPage() {
 
     const typeFilter = searchParams.get('type') || '';
     const projectFilter = searchParams.get('project_id') || '';
+    const statusFilter = searchParams.get('status') || '';
 
     const { isAdmin } = useAuth();
 
@@ -73,6 +35,7 @@ export function FeedbackListPage() {
                 fetchFeedbackList({
                     type: typeFilter || undefined,
                     project_id: projectFilter || undefined,
+                    status: statusFilter || undefined,
                     limit: 100,
                 }),
             ]);
@@ -93,7 +56,7 @@ export function FeedbackListPage() {
 
     useEffect(() => {
         fetchData();
-    }, [typeFilter, projectFilter]);
+    }, [typeFilter, projectFilter, statusFilter]);
 
     const setFilter = (key: string, value: string) => {
         const next = new URLSearchParams(searchParams);
@@ -158,25 +121,21 @@ export function FeedbackListPage() {
                             <option key={pid} value={pid}>{pid}</option>
                         ))}
                     </select>
+                    <select
+                        value={statusFilter}
+                        onChange={e => setFilter('status', e.target.value)}
+                        className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 rounded-xl bg-white/80 dark:bg-white/5 backdrop-blur-md text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                    >
+                        <option value="">All Status</option>
+                        <option value="open">Open</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="closed">Closed</option>
+                    </select>
                 </div>
 
-                {/* Error */}
-                {error && (
-                    <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
-                        <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-                        </svg>
-                        {error}
-                    </div>
-                )}
-
-                {/* Loading */}
-                {loading && (
-                    <div className="flex flex-col items-center justify-center py-20">
-                        <div className="h-10 w-10 border-2 border-amber-500 rounded-full border-t-transparent animate-spin mb-4" />
-                        <p className="text-sm text-gray-400">Loading feedback...</p>
-                    </div>
-                )}
+                {error && <ErrorMessage message={error} />}
+                {loading && <LoadingSpinner message="Loading feedback..." />}
 
                 {/* Empty State */}
                 {!loading && items.length === 0 && !error && (
@@ -203,9 +162,9 @@ export function FeedbackListPage() {
                                 <tr className="border-b border-gray-200 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.02]">
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Type</th>
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Title</th>
+                                    <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Submitted By</th>
+                                    <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Status</th>
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Project</th>
-                                    <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Severity</th>
-                                    <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Files</th>
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Time</th>
                                 </tr>
                             </thead>
@@ -213,7 +172,6 @@ export function FeedbackListPage() {
                                 {items.map(item => {
                                     const typeConfig = TYPE_CONFIG[item.type] || { label: item.type, color: 'bg-gray-100 text-gray-600', darkColor: '', icon: '' };
                                     const sevConfig = item.severity ? SEVERITY_CONFIG[item.severity] : null;
-                                    const screenshots = parseScreenshots(item.screenshots);
 
                                     return (
                                         <tr
@@ -233,28 +191,26 @@ export function FeedbackListPage() {
                                                 )}
                                             </td>
                                             <td className="px-5 py-3.5">
+                                                {item.email ? (
+                                                    <span className="text-xs text-gray-600 dark:text-gray-300">{item.email}</span>
+                                                ) : item.user_id ? (
+                                                    <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{item.user_id.slice(0, 12)}...</span>
+                                                ) : (
+                                                    <span className="text-gray-300 dark:text-gray-600">Anonymous</span>
+                                                )}
+                                            </td>
+                                            <td className="px-5 py-3.5">
+                                                {(() => {
+                                                    const sc = STATUS_CONFIG[item.status || 'open'] || STATUS_CONFIG.open;
+                                                    return (
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${sc.color} ${sc.darkColor}`}>
+                                                            {sc.label}
+                                                        </span>
+                                                    );
+                                                })()}
+                                            </td>
+                                            <td className="px-5 py-3.5">
                                                 <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-white/5 px-2 py-0.5 rounded">{item.project_id}</span>
-                                            </td>
-                                            <td className="px-5 py-3.5">
-                                                {sevConfig ? (
-                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${sevConfig.color} ${sevConfig.darkColor}`}>
-                                                        {item.severity}
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-gray-300 dark:text-gray-600">&mdash;</span>
-                                                )}
-                                            </td>
-                                            <td className="px-5 py-3.5">
-                                                {screenshots.length > 0 ? (
-                                                    <span className="inline-flex items-center gap-1 text-xs text-blue-500 dark:text-blue-400">
-                                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H3.75A2.25 2.25 0 001.5 6.75v11.25c0 1.242 1.008 2.25 2.25 2.25z" />
-                                                        </svg>
-                                                        {screenshots.length}
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-gray-300 dark:text-gray-600">&mdash;</span>
-                                                )}
                                             </td>
                                             <td className="px-5 py-3.5 text-gray-400 dark:text-gray-500 text-xs whitespace-nowrap">
                                                 {timeAgo(item.created_at)}

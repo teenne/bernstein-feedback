@@ -9,15 +9,122 @@ export interface HttpAdapterOptions {
   timeout?: number;
   /** Transform the event before sending (for custom backends) */
   transform?: (event: FeedbackEvent) => unknown;
+  /**
+   * Optional WebSocket endpoint for realtime notification push.
+   * When set, the adapter exposes `subscribeToNotifications` so the
+   * notification hook can skip its 30s HTTP polling fallback.
+   * Example: 'ws://localhost:3000/api/notifications/ws'
+   */
+  wsEndpoint?: string;
+}
+
+export type HttpAdapterReturn = FeedbackAdapter & {
+  endpoint: string;
+  subscribeToNotifications?: (
+    projectId: string,
+    userId: string,
+    onChange: () => void,
+  ) => () => void;
+};
+
+/**
+ * Open a WebSocket connection to the server's notification channel.
+ * Each message received fires the `onChange` callback; the hook then
+ * re-fetches the notification list via the normal HTTP path.
+ *
+ * Auto-reconnects with exponential backoff. Returns an unsubscribe
+ * function that cleanly closes the socket.
+ */
+function openNotificationSocket(
+  wsEndpoint: string,
+  projectId: string,
+  userId: string,
+  onChange: () => void,
+): () => void {
+  // Browsers only. If there's no WebSocket global, bail out — the hook's
+  // polling fallback will take over automatically.
+  if (typeof window === 'undefined' || typeof WebSocket === 'undefined') {
+    return () => { /* no-op */ };
+  }
+
+  const url =
+    wsEndpoint.replace(/\/+$/, '') +
+    `?project_id=${encodeURIComponent(projectId)}&user_id=${encodeURIComponent(userId)}`;
+
+  let socket: WebSocket | null = null;
+  let closed = false;
+  let reconnectMs = 1000;
+  const RECONNECT_MAX = 30_000;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const connect = () => {
+    if (closed) return;
+    try {
+      socket = new WebSocket(url);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+
+    socket.onopen = () => {
+      reconnectMs = 1000;
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(typeof event.data === 'string' ? event.data : '');
+        if (msg?.type === 'new_notification') {
+          onChange();
+        }
+      } catch {
+        // Ignore non-JSON or malformed frames
+      }
+    };
+
+    socket.onclose = () => {
+      socket = null;
+      scheduleReconnect();
+    };
+
+    socket.onerror = () => {
+      // Let onclose handle reconnect so we don't double-trigger
+    };
+  };
+
+  const scheduleReconnect = () => {
+    if (closed) return;
+    const delay = reconnectMs;
+    reconnectMs = Math.min(reconnectMs * 2, RECONNECT_MAX);
+    reconnectTimer = setTimeout(connect, delay);
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (socket) {
+      try { socket.close(); } catch { /* ignore */ }
+      socket = null;
+    }
+  };
 }
 
 /**
- * HTTP adapter for sending feedback to a REST endpoint
+ * HTTP adapter for sending feedback to a REST endpoint.
+ * Optionally exposes realtime notification subscription via WebSocket
+ * when `wsEndpoint` is configured.
  */
-export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter {
-  const { endpoint, headers = {}, timeout = 10000, transform } = options;
+export function httpAdapter(options: HttpAdapterOptions): HttpAdapterReturn {
+  const { endpoint, headers = {}, timeout = 10000, transform, wsEndpoint } = options;
 
-  return {
+  const base: HttpAdapterReturn = {
+    /** The endpoint URL (used by widget to derive plan-status/notification URLs) */
+    endpoint,
+
     async submit(event: FeedbackEvent) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -72,6 +179,16 @@ export function httpAdapter(options: HttpAdapterOptions): FeedbackAdapter {
       }
     },
   };
+
+  // Attach a realtime-push implementation only when a WebSocket URL was
+  // provided. The presence of `subscribeToNotifications` on the adapter
+  // object is what makes `useNotifications` choose realtime over polling.
+  if (wsEndpoint) {
+    base.subscribeToNotifications = (projectId, userId, onChange) =>
+      openNotificationSocket(wsEndpoint, projectId, userId, onChange);
+  }
+
+  return base;
 }
 
 /**

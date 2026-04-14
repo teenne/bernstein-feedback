@@ -1,29 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchFeedbackById } from '../lib/feedbackApi';
+import { fetchFeedbackById, updateFeedbackStatus } from '../lib/feedbackApi';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
-
-interface FeedbackDetail {
-    id: string;
-    project_id: string;
-    type: string;
-    title: string;
-    description: string;
-    category: string | null;
-    severity: string | null;
-    impact: string | null;
-    email: string | null;
-    context: any;
-    screenshots: string[];
-    highlighted_element: any;
-    user_id: string | null;
-    tenant_id: string | null;
-    screen_id: string | null;
-    page_name: string | null;
-    metadata: any;
-    created_at: string;
-}
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { TYPE_CONFIG } from '../lib/constants';
+import type { FeedbackDetail } from '../lib/types';
 
 export function FeedbackDetailPage() {
     const { id } = useParams();
@@ -32,6 +15,24 @@ export function FeedbackDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [lightbox, setLightbox] = useState<string | null>(null);
+    const [statusUpdating, setStatusUpdating] = useState(false);
+    const [resolutionNote, setResolutionNote] = useState('');
+
+    const handleStatusChange = async (newStatus: string) => {
+        if (!item) return;
+        setStatusUpdating(true);
+        try {
+            await updateFeedbackStatus(item.id, newStatus, newStatus === 'resolved' ? resolutionNote : undefined);
+            setItem(prev => prev ? {
+                ...prev,
+                status: newStatus,
+                resolved_at: (newStatus === 'resolved' || newStatus === 'closed') ? new Date().toISOString() : null,
+            } : null);
+        } catch (err: any) {
+            setError(err.message || 'Failed to update status');
+        }
+        setStatusUpdating(false);
+    };
 
     useEffect(() => {
         (async () => {
@@ -45,19 +46,8 @@ export function FeedbackDetailPage() {
         })();
     }, [id]);
 
-    if (loading) return (
-        <LayoutWrapper>
-            <div className="flex flex-col items-center justify-center py-20">
-                <div className="h-10 w-10 border-2 border-amber-500 rounded-full border-t-transparent animate-spin mb-4" />
-                <p className="text-sm text-gray-400">Loading feedback...</p>
-            </div>
-        </LayoutWrapper>
-    );
-    if (error) return (
-        <LayoutWrapper>
-            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-xl text-sm">{error}</div>
-        </LayoutWrapper>
-    );
+    if (loading) return <LayoutWrapper><LoadingSpinner message="Loading feedback..." /></LayoutWrapper>;
+    if (error) return <LayoutWrapper><ErrorMessage message={error} /></LayoutWrapper>;
     if (!item) return null;
 
     const context = item.context || {};
@@ -82,9 +72,10 @@ export function FeedbackDetailPage() {
             <GlassCard>
                 <div className="flex items-start justify-between">
                     <div>
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${item.type === 'bug_report' ? 'bg-red-100 text-red-700' : item.type === 'feature_request' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                            {item.type}
-                        </span>
+                        {(() => {
+                            const tc = TYPE_CONFIG[item.type] || { label: item.type, color: 'bg-gray-100 text-gray-600', darkColor: '' };
+                            return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${tc.color} ${tc.darkColor}`}>{tc.label}</span>;
+                        })()}
                         <h1 className="text-xl font-bold mt-2">{item.title}</h1>
                         {item.description && <p className="text-gray-500 mt-2">{item.description}</p>}
                     </div>
@@ -92,6 +83,60 @@ export function FeedbackDetailPage() {
                         <p>{new Date(item.created_at).toLocaleString()}</p>
                         <p className="font-mono mt-1">{item.id}</p>
                     </div>
+                </div>
+
+                {/* Status Controls */}
+                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Status</span>
+                        {['open', 'in_progress', 'resolved', 'closed'].map((s) => {
+                            const isActive = item.status === s;
+                            const colors: Record<string, string> = {
+                                open: isActive ? 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-200' : '',
+                                in_progress: isActive ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400' : '',
+                                resolved: isActive ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400' : '',
+                                closed: isActive ? 'bg-gray-300 text-gray-700 dark:bg-gray-600 dark:text-gray-300' : '',
+                            };
+                            return (
+                                <button
+                                    key={s}
+                                    onClick={() => handleStatusChange(s)}
+                                    disabled={statusUpdating || isActive}
+                                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${
+                                        isActive
+                                            ? `${colors[s]} border-transparent`
+                                            : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:border-gray-300'
+                                    } disabled:opacity-50`}
+                                >
+                                    {s.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                                </button>
+                            );
+                        })}
+                        {item.resolved_at && (
+                            <span className="text-xs text-gray-400 ml-2">
+                                Resolved {new Date(item.resolved_at).toLocaleDateString()}
+                                {item.resolved_by && ` by ${item.resolved_by}`}
+                            </span>
+                        )}
+                    </div>
+                    {(item.status === 'open' || item.status === 'in_progress') && (
+                        <div className="mt-3 flex gap-2">
+                            <input
+                                type="text"
+                                placeholder="Resolution note (optional)"
+                                value={resolutionNote}
+                                onChange={(e) => setResolutionNote(e.target.value)}
+                                className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
+                            />
+                            <button
+                                onClick={() => handleStatusChange('resolved')}
+                                disabled={statusUpdating}
+                                className="px-4 py-2 text-sm font-medium bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors disabled:opacity-50"
+                            >
+                                {statusUpdating ? 'Resolving...' : 'Resolve'}
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">

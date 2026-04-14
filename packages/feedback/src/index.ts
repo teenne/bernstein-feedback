@@ -19,6 +19,7 @@ export {
   FeedbackCategorySchema,
   SeveritySchema,
   ImpactSchema,
+  NotificationSchema,
 } from './schemas';
 
 // Type exports
@@ -36,6 +37,8 @@ export type {
   FeedbackFormState,
   FeedbackAdapter,
   FeedbackConfig,
+  PlanStatus,
+  Notification,
 } from './schemas';
 
 // Styles are extracted as a separate file by Vite (cssCodeSplit: false + assetFileNames: 'styles.css')

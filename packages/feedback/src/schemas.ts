@@ -180,6 +180,31 @@ export interface FeedbackAdapter {
 }
 
 /**
+ * Plan status returned from the server
+ */
+export interface PlanStatus {
+  can_submit: boolean;
+  tickets_used: number;
+  tickets_limit: number;
+  plan: string;
+  message?: string;
+}
+
+/**
+ * Notification from the server (ticket resolved, status change)
+ */
+export const NotificationSchema = z.object({
+  id: z.string(),
+  feedback_id: z.string(),
+  type: z.enum(['status_change', 'resolved']),
+  title: z.string(),
+  message: z.string().nullable().optional(),
+  read: z.boolean(),
+  created_at: z.string(),
+});
+export type Notification = z.infer<typeof NotificationSchema>;
+
+/**
  * Configuration for the feedback provider
  */
 export interface FeedbackConfig {
@@ -189,6 +214,18 @@ export interface FeedbackConfig {
   projectId: string;
   /** Regex patterns to redact from context (passwords, tokens, etc.) */
   redact?: RegExp[];
+
+  // Plan system
+  /** Endpoint to check plan status. Auto-derived from HTTP adapter endpoint if not set. */
+  planCheckEndpoint?: string;
+
+  // Notifications (loop-close)
+  /** Endpoint for notification polling. Auto-derived from HTTP adapter endpoint if not set. */
+  notificationsEndpoint?: string;
+  /** Notification polling interval in ms (default: 30000) */
+  notificationPollInterval?: number;
+  /** Enable notification badge on feedback button (default: true when userId is set) */
+  enableNotifications?: boolean;
 
   // Screen identity (update these as user navigates)
   /** Stable screen identifier (e.g., 'checkout', 'user-settings') */
@@ -209,6 +246,8 @@ export interface FeedbackConfig {
   // User identity (minimal - no PII unless consented)
   /** Internal user ID */
   userId?: string;
+  /** User email (auto-attached to every submission for identification) */
+  userEmail?: string;
   /** Tenant or organization ID */
   tenantId?: string;
   /** User role (e.g., 'admin', 'member') */

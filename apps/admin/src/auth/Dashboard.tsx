@@ -1,33 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
+import { API_URL, useSupabaseDirectly, getAuthHeaders } from '../lib/config';
 import { SettingsPage } from '../pages/SettingsPage';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
 import { useAuth } from '../hooks/useAuth';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-const useSupabaseDirectly = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
-
-function getAuthHeaders(): Record<string, string> {
-    const token = sessionStorage.getItem('feedback_token');
-    if (token) return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-    return { 'Content-Type': 'application/json' };
-}
+import type { Project } from '../lib/types';
 
 interface DashboardProps {
     session?: Session | null;
     onProjectSelect?: (projectId: string) => void;
-}
-
-interface Project {
-    id: string;
-    name: string;
-    owner_id: string;
-    owner_email: string;
-    plan: 'free' | 'pro';
-    config?: any;
-    created_at: string;
 }
 
 export default function Dashboard({ session, onProjectSelect }: DashboardProps) {
@@ -39,12 +22,19 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
         if (id && onProjectSelect) onProjectSelect(id);
     };
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+    // When the user clicks "Upgrade" on a specific project card, we remember
+    // which project they want to upgrade so the modal can reference it and
+    // the demo-activate button knows what to flip. Null when the modal is
+    // opened generically (e.g. via a project-limit block).
+    const [pendingUpgradeProjectId, setPendingUpgradeProjectId] = useState<string | null>(null);
     const [createForm, setCreateForm] = useState({ id: '', name: '', description: '' });
     const [createError, setCreateError] = useState('');
     const [creating, setCreating] = useState(false);
     const [members, setMembers] = useState<{ id: string; user_id: string; email: string; role: string; created_at: string }[]>([]);
     const [memberEmail, setMemberEmail] = useState('');
     const [addingMember, setAddingMember] = useState(false);
+    const [addMemberError, setAddMemberError] = useState('');
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; variant: 'danger' | 'warning' | 'default'; confirmLabel: string; onConfirm: () => void } | null>(null);
 
     const auth = useAuth();
@@ -128,6 +118,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
     const handleAddMember = async () => {
         if (!selectedProjectId || !memberEmail.trim()) return;
         setAddingMember(true);
+        setAddMemberError('');
         try {
             if (useSupabaseDirectly) {
                 // Look up user_id from user_roles by email
@@ -138,7 +129,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     .maybeSingle();
 
                 if (!userRow) {
-                    alert(`No user found with email: ${memberEmail.trim()}`);
+                    setAddMemberError(`No user found with email: ${memberEmail.trim()}`);
                     setAddingMember(false);
                     return;
                 }
@@ -150,8 +141,8 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     role: 'member',
                 }, { onConflict: 'project_id,user_id' });
 
-                if (error) alert('Error: ' + error.message);
-                else { setMemberEmail(''); fetchMembers(selectedProjectId); }
+                if (error) setAddMemberError(error.message);
+                else { setMemberEmail(''); setAddMemberError(''); fetchMembers(selectedProjectId); }
             } else {
                 const res = await fetch(`${API_URL}/api/projects/${selectedProjectId}/members`, {
                     method: 'POST',
@@ -159,15 +150,28 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     body: JSON.stringify({ email: memberEmail.trim().toLowerCase() }),
                 });
                 const json = await res.json();
-                if (!json.success) alert('Error: ' + json.error);
-                else { setMemberEmail(''); fetchMembers(selectedProjectId); }
+                if (!json.success) setAddMemberError(json.error || 'Failed to add member');
+                else { setMemberEmail(''); setAddMemberError(''); fetchMembers(selectedProjectId); }
             }
-        } catch { alert('Failed to connect to server'); }
+        } catch { setAddMemberError('Failed to connect to server'); }
         setAddingMember(false);
     };
 
-    const handleRemoveMember = (memberId: string, memberUserId: string) => {
+    const handleRemoveMember = (memberId: string, memberUserId: string, memberRole?: string) => {
         if (!selectedProjectId) return;
+        // Guard: owners can't be removed from a project. The UI already
+        // hides the button for owners, but this catches any programmatic
+        // call (stale state, double-click, etc.) before it hits the DB.
+        if (memberRole === 'owner') {
+            setConfirmDialog({
+                title: 'Cannot Remove Owner',
+                message: 'The project owner cannot be removed. Transfer ownership first.',
+                variant: 'warning',
+                confirmLabel: 'OK',
+                onConfirm: () => setConfirmDialog(null),
+            });
+            return;
+        }
         setConfirmDialog({
             title: 'Remove Member',
             message: 'Are you sure you want to remove this member from the project?',
@@ -231,7 +235,12 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                 });
                 const json = await res.json();
                 if (!json.success) {
-                    setCreateError(json.error || 'Failed to create project');
+                    if (json.error?.includes('Upgrade') || json.error?.includes('plan allows')) {
+                        setShowCreateModal(false);
+                        setShowUpgradeModal(true);
+                    } else {
+                        setCreateError(json.error || 'Failed to create project');
+                    }
                 } else {
                     setShowCreateModal(false);
                     fetchProjects();
@@ -244,17 +253,25 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
         setCreating(false);
     };
 
-    const handleUpdatePlan = async (projectId: string, plan: 'free' | 'pro') => {
+    // Plan IDs in the DB are 'free' and 'paid' (see projects_plan_check
+    // constraint + seeded rows in the plans table). We update BOTH
+    // `plan` (legacy text column) and `plan_id` (FK to plans.id) so the
+    // plan-limit lookup — which joins on plan_id — actually picks up the
+    // new tier. Updating only `plan` did nothing functionally.
+    const handleUpdatePlan = async (projectId: string, plan: 'free' | 'paid') => {
         try {
             if (useSupabaseDirectly) {
-                const { error } = await supabase!.from('projects').update({ plan }).eq('id', projectId);
+                const { error } = await supabase!
+                    .from('projects')
+                    .update({ plan, plan_id: plan })
+                    .eq('id', projectId);
                 if (error) alert('Error: ' + error.message);
                 else fetchProjects();
             } else {
                 const res = await fetch(`${API_URL}/api/projects/${projectId}`, {
                     method: 'PATCH',
                     headers: getAuthHeaders(),
-                    body: JSON.stringify({ plan }),
+                    body: JSON.stringify({ plan, plan_id: plan }),
                 });
                 const json = await res.json();
                 if (json.success) fetchProjects();
@@ -314,7 +331,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                             onClick={() => setSelectedProjectId(p.id)}
                             className={`flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg w-full transition-colors ${selectedProjectId === p.id ? 'bg-gray-100 dark:bg-white/5 text-gray-900 dark:text-white' : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'}`}
                         >
-                            <span className={`w-2 h-2 rounded-full ${p.plan === 'pro' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+                            <span className={`w-2 h-2 rounded-full ${p.plan === 'paid' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
                             {p.id}
                         </button>
                     ))}
@@ -395,14 +412,14 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-3">Team Members</h3>
 
                                 {/* Add member */}
-                                <div className="flex gap-2 mb-4">
+                                <div className="flex gap-2 mb-2">
                                     <input
                                         type="email"
                                         value={memberEmail}
-                                        onChange={(e) => setMemberEmail(e.target.value)}
+                                        onChange={(e) => { setMemberEmail(e.target.value); setAddMemberError(''); }}
                                         onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
                                         placeholder="Enter email to add member..."
-                                        className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                                        className={`flex-1 px-3 py-1.5 text-sm rounded-lg border ${addMemberError ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none`}
                                     />
                                     <button
                                         onClick={handleAddMember}
@@ -412,6 +429,12 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                         {addingMember ? '...' : 'Add'}
                                     </button>
                                 </div>
+                                {addMemberError && (
+                                    <div className="mb-4 flex items-center gap-2 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-sm px-3 py-2 rounded-lg">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                                        {addMemberError}
+                                    </div>
+                                )}
 
                                 {/* Member list */}
                                 {members.length === 0 ? (
@@ -429,12 +452,20 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                                         <p className="text-[10px] text-gray-400">{m.role}</p>
                                                     </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => handleRemoveMember(m.id, m.user_id)}
-                                                    className="text-[10px] text-red-400 hover:text-red-500 font-bold uppercase transition-colors"
-                                                >
-                                                    Remove
-                                                </button>
+                                                {m.role === 'owner' ? (
+                                                    // Owners can't be removed — they created the project.
+                                                    // To reassign ownership, transfer first (not yet in UI).
+                                                    <span className="text-[10px] text-gray-400 font-bold uppercase">
+                                                        Owner
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => handleRemoveMember(m.id, m.user_id, m.role)}
+                                                        className="text-[10px] text-red-400 hover:text-red-500 font-bold uppercase transition-colors"
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -507,7 +538,18 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
 
                                         <div className="flex gap-2 pt-4 border-t border-gray-50 dark:border-white/5">
                                             {project.plan === 'free' ? (
-                                                <button onClick={(e) => { e.stopPropagation(); handleUpdatePlan(project.id, 'pro'); }} className="text-[10px] font-bold text-amber-500 uppercase">Upgrade</button>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        // Don't flip the plan directly — route through the
+                                                        // purchase modal so users are asked to pay first.
+                                                        setPendingUpgradeProjectId(project.id);
+                                                        setShowUpgradeModal(true);
+                                                    }}
+                                                    className="text-[10px] font-bold text-amber-500 uppercase"
+                                                >
+                                                    Upgrade
+                                                </button>
                                             ) : (
                                                 <button onClick={(e) => { e.stopPropagation(); handleUpdatePlan(project.id, 'free'); }} className="text-[10px] font-bold text-gray-500 uppercase">Manage Plan</button>
                                             )}
@@ -611,6 +653,85 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Upgrade Plan Modal */}
+            {showUpgradeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center">
+                    <div
+                        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                        onClick={() => { setShowUpgradeModal(false); setPendingUpgradeProjectId(null); }}
+                    />
+                    <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8">
+                        <button
+                            onClick={() => { setShowUpgradeModal(false); setPendingUpgradeProjectId(null); }}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                        >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                        <div className="text-center">
+                            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mb-4">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                                </svg>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                                {pendingUpgradeProjectId
+                                    ? 'Purchase Paid plan'
+                                    : 'Project limit reached'}
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                                {pendingUpgradeProjectId ? (
+                                    <>
+                                        Upgrading <strong className="text-gray-800 dark:text-gray-200">{pendingUpgradeProjectId}</strong>{' '}
+                                        to the Paid plan. Contact us to complete purchase — your project switches to
+                                        Paid limits as soon as payment is confirmed.
+                                    </>
+                                ) : (
+                                    <>Your current plan allows 1 project. Upgrade to create more projects with higher ticket limits.</>
+                                )}
+                            </p>
+                            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 mb-6 text-left space-y-2">
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> Unlimited projects
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> Unlimited tickets / month
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <span className="text-emerald-500">&#10003;</span> AI clustering, PostHog, API access
+                                </div>
+                            </div>
+                            <a
+                                href={`mailto:support@bernstein.ai?subject=Upgrade%20Plan&body=${encodeURIComponent(
+                                    pendingUpgradeProjectId
+                                        ? `Hi, I'd like to upgrade project "${pendingUpgradeProjectId}" to the Paid plan.`
+                                        : `Hi, I'd like to upgrade my plan to create more projects.`
+                                )}`}
+                                className="block w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg transition-all text-center"
+                            >
+                                Contact Sales to Purchase
+                            </a>
+                            <p className="text-xs text-gray-400 mt-3">We'll get back to you within 24 hours.</p>
+
+                            {pendingUpgradeProjectId && (
+                                <button
+                                    onClick={async () => {
+                                        const pid = pendingUpgradeProjectId;
+                                        setShowUpgradeModal(false);
+                                        setPendingUpgradeProjectId(null);
+                                        if (pid) await handleUpdatePlan(pid, 'paid');
+                                    }}
+                                    className="mt-4 text-[11px] text-gray-400 hover:text-amber-500 underline underline-offset-2"
+                                >
+                                    Simulate purchase (demo) — activate Paid for {pendingUpgradeProjectId}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}

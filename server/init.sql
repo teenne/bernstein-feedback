@@ -189,6 +189,14 @@ CREATE TABLE feedback (
   labels TEXT[] NOT NULL DEFAULT '{}',
   priority TEXT CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
 
+  -- Session provider fields (Tier 1) — populated when the host app
+  -- configures a `sessionProvider` (PostHog, LogRocket, FullStory, etc.).
+  -- Nullable so session-less hosts keep working unchanged.
+  session_id          TEXT,
+  session_provider    TEXT,   -- provider name, e.g. 'posthog'
+  session_replay_url  TEXT,   -- deep link into the recorded session
+  user_properties     JSONB,  -- identity traits (plan, role, custom fields)
+
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -265,6 +273,7 @@ CREATE INDEX idx_feedback_project ON feedback(project_id);
 CREATE INDEX idx_feedback_status ON feedback(status);
 CREATE INDEX idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
 CREATE INDEX idx_feedback_labels ON feedback USING GIN (labels);
+CREATE INDEX idx_feedback_session_id ON feedback(session_id) WHERE session_id IS NOT NULL;
 CREATE INDEX idx_feedback_type ON feedback(type);
 CREATE INDEX idx_feedback_created ON feedback(created_at DESC);
 CREATE INDEX idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;

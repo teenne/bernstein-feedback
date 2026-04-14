@@ -42,6 +42,11 @@ export interface FeedbackDetail extends FeedbackItem {
     page_name: string | null;
     resolved_by: string | null;
     resolution_note: string | null;
+    // Session provider fields (Tier 1)
+    session_id?: string | null;
+    session_provider?: string | null;
+    session_replay_url?: string | null;
+    user_properties?: Record<string, unknown> | null;
 }
 
 export interface Stats {

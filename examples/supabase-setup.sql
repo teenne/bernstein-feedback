@@ -289,6 +289,14 @@ ALTER TABLE feedback ADD CONSTRAINT feedback_priority_check
 CREATE INDEX IF NOT EXISTS idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_feedback_labels ON feedback USING GIN (labels);
 
+-- Session provider fields (Tier 1) — populated by the sessionProvider
+-- contract on FeedbackProvider when a host configures PostHog etc.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_id TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_provider TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_replay_url TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS user_properties JSONB;
+CREATE INDEX IF NOT EXISTS idx_feedback_session_id ON feedback(session_id) WHERE session_id IS NOT NULL;
+
 ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_status_check;
 ALTER TABLE feedback ADD CONSTRAINT feedback_status_check
   CHECK (status IN ('open', 'in_progress', 'resolved', 'closed'));

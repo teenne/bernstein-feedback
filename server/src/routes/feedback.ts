@@ -43,9 +43,11 @@ router.post('/', async (req, res) => {
         project_id, type, timestamp, event_id, title, description, category, severity, impact, email,
         url, route, screen_id, page_name,
         context, metadata, screenshots, highlighted_element,
-        user_id, tenant_id, role, bernstein_run_id
+        user_id, tenant_id, role, bernstein_run_id,
+        session_id, session_provider, session_replay_url, user_properties
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        $23, $24, $25, $26
       ) RETURNING id
     `;
 
@@ -72,7 +74,13 @@ router.post('/', async (req, res) => {
             event.user_id ?? null,
             event.tenant_id ?? null,
             event.role ?? null,
-            event.bernstein_run_id ?? null
+            event.bernstein_run_id ?? null,
+            // Session provider fields (Tier 1) — may all be null if the
+            // host app didn't configure a sessionProvider.
+            event.session_id ?? null,
+            event.session_provider ?? null,
+            event.session_replay_url ?? null,
+            event.user_properties ? JSON.stringify(event.user_properties) : null,
         ];
 
         const result = await query<Pick<Feedback, 'id'>>(text, values);
@@ -108,7 +116,7 @@ router.get('/', requireAuth, async (req, res) => {
         const user = (req as any).user as JwtPayload;
         const { project_id, type, status, severity, priority, limit = '50', offset = '0' } = req.query;
 
-        let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, created_at FROM feedback';
+        let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, session_id, session_provider, session_replay_url, user_properties, created_at FROM feedback';
         const conditions: string[] = [];
         const values: any[] = [];
         let paramIndex = 1;

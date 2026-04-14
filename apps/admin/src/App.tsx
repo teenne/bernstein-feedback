@@ -6,6 +6,7 @@ import {
   FeedbackDialog,
   FeedbackToast,
   FeedbackErrorBoundary,
+  posthogSessionProvider,
 } from "akk-feedback";
 import {
   supabaseAdapter,
@@ -18,7 +19,13 @@ import { useFeedbackConfig } from "./hooks/useFeedbackConfig";
 import { useAuth } from "./hooks/useAuth";
 import { supabase } from "./lib/supabaseClient";
 import { SESSION_KEYS } from "./lib/config";
+import { initPostHog, identifyPostHog, resetPostHog } from "./lib/posthog";
 import { Header } from "./components/Header";
+
+// Kick off PostHog at module load so it's ready before any component
+// mounts. Returns null when VITE_POSTHOG_KEY isn't set — App then
+// drops the sessionProvider so FeedbackProvider works without it.
+const posthogInstance = initPostHog();
 import {
   fetchUserProjectIds,
   fetchProjects,
@@ -85,6 +92,21 @@ export default function App() {
   } = useFeedbackConfig(activeProjectId);
 
   // Load user's accessible projects — show plan selection if none exist (new user)
+  // Sync PostHog identity with the current auth user so person
+  // properties (email, plan/role if we have them) show up on every
+  // submitted ticket. Resets on logout so no identity is retained
+  // between sessions. Safe no-op when PostHog isn't initialized.
+  useEffect(() => {
+    if (auth.isLoggedIn && auth.userId) {
+      identifyPostHog(auth.userId, {
+        email: auth.email ?? undefined,
+        is_admin: auth.isAdmin,
+      });
+    } else {
+      resetPostHog();
+    }
+  }, [auth.isLoggedIn, auth.userId, auth.email, auth.isAdmin]);
+
   useEffect(() => {
     if (!auth.isLoggedIn) return;
     (async () => {
@@ -226,6 +248,12 @@ export default function App() {
           adapter: feedbackAdapter,
           userId: auth.userId || undefined,
           userEmail: auth.email || undefined,
+          // Only attach the session provider when PostHog actually
+          // initialized (VITE_POSTHOG_KEY was set). Otherwise stay unset
+          // so the feedback flow doesn't try to read null values.
+          sessionProvider: posthogInstance
+            ? posthogSessionProvider(posthogInstance)
+            : undefined,
         }}
       >
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">

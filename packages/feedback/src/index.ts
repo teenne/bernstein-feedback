@@ -39,7 +39,15 @@ export type {
   FeedbackConfig,
   PlanStatus,
   Notification,
+  SessionProvider,
 } from './schemas';
+
+// Session providers (Tier 1) — plug analytics tools into feedback
+// submissions. PostHog is the reference implementation; the interface
+// is open enough to add LogRocket / FullStory / Mixpanel without
+// touching the core.
+export { posthogSessionProvider } from './sessionProviders/posthog';
+export type { PostHogLike } from './sessionProviders/posthog';
 
 // Styles are extracted as a separate file by Vite (cssCodeSplit: false + assetFileNames: 'styles.css')
 // Consumers import explicitly: import '@bernstein/feedback/styles.css'

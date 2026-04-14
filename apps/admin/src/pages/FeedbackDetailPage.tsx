@@ -214,6 +214,61 @@ export function FeedbackDetailPage() {
                 </div>
             </GlassCard>
 
+            {/* Session & Identity (Tier 1) — shows data captured via the
+                sessionProvider contract (PostHog / LogRocket / FullStory).
+                Card is invisible when no session metadata was captured,
+                so it never clutters the layout for session-less submissions. */}
+            {(item.session_replay_url || item.session_id || (item.user_properties && Object.keys(item.user_properties).length > 0)) && (
+                <GlassCard title="Session & Identity">
+                    <div className="space-y-3">
+                        {item.session_replay_url && (
+                            <a
+                                href={item.session_replay_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 rounded-lg shadow-sm transition-all"
+                            >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                View session replay
+                                {item.session_provider && (
+                                    <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">
+                                        · {item.session_provider}
+                                    </span>
+                                )}
+                            </a>
+                        )}
+                        {(item.session_id || item.session_provider) && (
+                            <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">
+                                {item.session_id && <span>session: {item.session_id}</span>}
+                            </div>
+                        )}
+                        {item.user_properties && Object.keys(item.user_properties).length > 0 && (
+                            <div className="pt-3 mt-3 border-t border-gray-100 dark:border-white/5">
+                                <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                                    User properties
+                                </p>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                    {Object.entries(item.user_properties).map(([key, value]) => (
+                                        <div key={key}>
+                                            <p className="text-[11px] text-gray-400 truncate">{key}</p>
+                                            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate" title={String(value ?? '')}>
+                                                {value == null
+                                                    ? <span className="text-gray-300 dark:text-gray-600">—</span>
+                                                    : typeof value === 'object'
+                                                        ? <code className="text-[11px]">{JSON.stringify(value)}</code>
+                                                        : String(value)}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </GlassCard>
+            )}
+
             {/* Triage (P3) — priority + labels. Separate card so it visually
                 anchors the workflow: pick priority, tag with labels, then
                 resolve via the status controls above. */}

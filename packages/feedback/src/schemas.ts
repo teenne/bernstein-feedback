@@ -139,6 +139,15 @@ export const FeedbackEventSchema = z.object({
   // Integration
   bernstein_run_id: z.string().uuid().optional(),
   metadata: z.record(z.unknown()).optional(),
+
+  // Session provider (Tier 1 — PostHog / LogRocket / FullStory / etc.)
+  // Populated automatically by the widget when a `sessionProvider` is
+  // configured on FeedbackProvider. All four are optional so older
+  // events and session-less hosts keep working unchanged.
+  session_id: z.string().optional(),
+  session_provider: z.string().optional(),
+  session_replay_url: z.string().url().optional(),
+  user_properties: z.record(z.unknown()).optional(),
 });
 
 // Type exports
@@ -205,11 +214,45 @@ export const NotificationSchema = z.object({
 export type Notification = z.infer<typeof NotificationSchema>;
 
 /**
+ * (Tier 1) Pluggable session-analytics provider.
+ *
+ * Any analytics tool (PostHog, LogRocket, FullStory, Mixpanel, Sentry
+ * replays, etc.) can be plugged in by implementing this three-method
+ * contract. All methods are optional — if any return `null`/`undefined`
+ * the widget silently skips that field on the submitted ticket.
+ *
+ * The widget calls these synchronously during context capture, so
+ * implementations must return quickly or return null if the underlying
+ * SDK isn't ready yet. DO NOT do network I/O inside these methods.
+ *
+ * @example (PostHog)
+ *   sessionProvider: posthogSessionProvider(posthog)
+ */
+export interface SessionProvider {
+  /** Short provider identifier stored alongside the session id (e.g. 'posthog'). */
+  readonly name: string;
+  /** Current session id, or null if there isn't one. */
+  getSessionId(): string | null;
+  /** Identity properties for the current user (plan, role, any custom traits). */
+  getUserProperties(): Record<string, unknown> | null;
+  /** Deep link to the recorded session at the current moment, if the provider supports it. */
+  getReplayUrl(sessionId: string): string | null;
+}
+
+/**
  * Configuration for the feedback provider
  */
 export interface FeedbackConfig {
   /** The adapter to use for submitting feedback */
   adapter: FeedbackAdapter;
+  /**
+   * (Tier 1) Optional session-analytics provider.
+   * When present, every submitted ticket gains `session_id`,
+   * `session_provider`, `session_replay_url`, and `user_properties`,
+   * giving the admin dashboard a one-click deep link into the
+   * provider's session replay for that user at that moment.
+   */
+  sessionProvider?: SessionProvider;
   /** Project identifier */
   projectId: string;
   /** Regex patterns to redact from context (passwords, tokens, etc.) */

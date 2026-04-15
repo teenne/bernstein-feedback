@@ -42,7 +42,13 @@ async function processBatch(): Promise<void> {
         return;
     }
 
-    if (rows.length === 0) return;
+    if (rows.length === 0) {
+        // Optional: periodic "still alive" log
+        // console.debug('[email] queue empty, awaiting work...');
+        return;
+    }
+
+    console.log(`[email] Found ${rows.length} pending emails in queue. Processing...`);
 
     for (const row of rows) {
         try {

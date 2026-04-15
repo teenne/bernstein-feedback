@@ -6,9 +6,14 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 async function migrate() {
-    const pool = process.env.DATABASE_URL
+    const DB_MODE = process.env.DB_MODE?.toLowerCase() || 
+        (process.env.DATABASE_URL || process.env.DATABASE_SUP_URL ? "cloud" : "local");
+    const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+    const useConnectionString = DB_MODE === "cloud" && url && !/<[^>]*>/.test(url);
+
+    const pool = useConnectionString
         ? new Pool({
-            connectionString: process.env.DATABASE_URL,
+            connectionString: url,
             ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
         })
         : new Pool({
@@ -17,6 +22,7 @@ async function migrate() {
             user: process.env.DB_USER || 'postgres',
             password: process.env.DB_PASSWORD || 'postgres',
             database: process.env.DB_NAME || 'postgres',
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
         });
 
     try {

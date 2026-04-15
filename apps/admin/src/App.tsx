@@ -1,12 +1,18 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
-import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   FeedbackProvider,
   FeedbackButton,
   FeedbackDialog,
   FeedbackToast,
   FeedbackErrorBoundary,
-  posthogSessionProvider,
+  // posthogSessionProvider,
 } from "akk-feedback";
 import {
   supabaseAdapter,
@@ -143,7 +149,7 @@ export default function App() {
     // Land the user on the Admin Portal so they can create their first
     // project immediately — matches the signup → create flow expected
     // from both Free and Paid paths.
-    navigate('/admin');
+    navigate("/admin");
   };
 
   // Build adapter based on raw settings
@@ -251,9 +257,9 @@ export default function App() {
           // Only attach the session provider when PostHog actually
           // initialized (VITE_POSTHOG_KEY was set). Otherwise stay unset
           // so the feedback flow doesn't try to read null values.
-          sessionProvider: posthogInstance
-            ? posthogSessionProvider(posthogInstance)
-            : undefined,
+          // sessionProvider: posthogInstance
+          //   ? posthogSessionProvider(posthogInstance)
+          //   : undefined,
         }}
       >
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">

@@ -11,38 +11,27 @@ const RETRY_DELAY = 2000;
 let useInMemory = false;
 const inMemoryStore: any[] = [];
 
-// PG Pool Setup — prefer DATABASE_URL (Render / Supabase / any host that
-// provides a connection string), fall back to individual vars for local dev.
-//
-// Placeholder URLs like `postgresql://user:<password>@host/db` (from a
-// copy-pasted template) are IGNORED so you can keep both DATABASE_URL and
-// DB_HOST set in your .env and toggle between "local dev" and "cloud"
-// just by filling in or clearing the DATABASE_URL value.
+// Prefer DB_MODE if set, otherwise detect based on availability of connection strings.
+const DB_MODE = process.env.DB_MODE?.toLowerCase() || 
+  (process.env.DATABASE_URL || process.env.DATABASE_SUP_URL ? "cloud" : "local");
+
 function isPlaceholderUrl(url: string): boolean {
   return /<[^>]*>/.test(url);
 }
 
-function hasValidDatabaseUrl(): boolean {
-  const url = process.env.DATABASE_URL;
-  if (!url || url.trim() === "") return false;
-  if (isPlaceholderUrl(url)) {
-    console.warn(
-      "⚠️  DATABASE_URL contains placeholder values (<...>) — ignoring it " +
-        "and falling back to DB_HOST/DB_USER/DB_PASSWORD. Replace the " +
-        "placeholders with real values to use the cloud database.",
-    );
-    return false;
-  }
-  return true;
+function getValidConnectionString(): string | null {
+  const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+  if (!url || url.trim() === "" || isPlaceholderUrl(url)) return null;
+  return url;
 }
 
-const useConnectionString = hasValidDatabaseUrl();
+const connectionString = getValidConnectionString();
+const useConnectionString = DB_MODE === "cloud" && !!connectionString;
 
 const pool = useConnectionString
   ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl:
-        process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
+      connectionString: connectionString!,
+      ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
       connectionTimeoutMillis: 5000,
     })
   : new Pool({
@@ -57,12 +46,25 @@ const pool = useConnectionString
 
 console.info(
   useConnectionString
-    ? "📡 Database mode: DATABASE_URL (cloud / Supabase / Render)"
-    : `📡 Database mode: local (${process.env.DB_HOST || "127.0.0.1"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "postgres"})`,
+    ? `📡 Database mode: CLOUD (via ${process.env.DATABASE_URL ? "DATABASE_URL" : "DATABASE_SUP_URL"})`
+    : `📡 Database mode: LOCAL (${process.env.DB_HOST || "127.0.0.1"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "postgres"})`,
 );
+
+if (!useConnectionString && (process.env.DATABASE_URL || process.env.DATABASE_SUP_URL)) {
+  console.warn(
+    "⚠️  NOTICE: You have a cloud database URL configured, but DB_MODE is set to 'local'. " +
+    "The server is NOT connected to Supabase. Change DB_MODE=cloud in .env to switch."
+  );
+}
 
 // Robust Connection Logic with Fallback
 export const connectWithRetry = async (): Promise<void> => {
+  if (DB_MODE === "memory") {
+    console.info("🧠 Database mode: IN-MEMORY (Explicitly set via DB_MODE)");
+    useInMemory = true;
+    return;
+  }
+
   let retries = 0;
   while (retries < MAX_RETRIES) {
     try {

@@ -1,12 +1,20 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchFeedbackById, updateFeedbackStatus } from '../lib/feedbackApi';
+import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage } from '../lib/feedbackApi';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { TYPE_CONFIG } from '../lib/constants';
-import type { FeedbackDetail } from '../lib/types';
+import type { FeedbackDetail, FeedbackPriority } from '../lib/types';
+
+// Priority visual config — dot color + chip style per level.
+const PRIORITY_OPTIONS: { value: FeedbackPriority; label: string; dot: string; chip: string }[] = [
+    { value: 'low',    label: 'Low',    dot: 'bg-gray-400',    chip: 'bg-gray-100 text-gray-700 dark:bg-gray-700/40 dark:text-gray-300' },
+    { value: 'medium', label: 'Medium', dot: 'bg-blue-500',    chip: 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' },
+    { value: 'high',   label: 'High',   dot: 'bg-amber-500',   chip: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300' },
+    { value: 'urgent', label: 'Urgent', dot: 'bg-red-500',     chip: 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300' },
+];
 
 export function FeedbackDetailPage() {
     const { id } = useParams();
@@ -17,6 +25,54 @@ export function FeedbackDetailPage() {
     const [lightbox, setLightbox] = useState<string | null>(null);
     const [statusUpdating, setStatusUpdating] = useState(false);
     const [resolutionNote, setResolutionNote] = useState('');
+    // P3: triage state. labelDraft is the text in the "Add label" input.
+    const [triageUpdating, setTriageUpdating] = useState(false);
+    const [labelDraft, setLabelDraft] = useState('');
+
+    const handlePriorityChange = async (newPriority: FeedbackPriority | null) => {
+        if (!item || triageUpdating) return;
+        // Toggle: clicking the active priority clears it
+        const nextPriority = item.priority === newPriority ? null : newPriority;
+        setTriageUpdating(true);
+        try {
+            await updateFeedbackTriage(item.id, { priority: nextPriority });
+            setItem(prev => prev ? { ...prev, priority: nextPriority } : null);
+        } catch (err: any) {
+            setError(err.message || 'Failed to update priority');
+        }
+        setTriageUpdating(false);
+    };
+
+    const handleAddLabel = async () => {
+        if (!item) return;
+        const next = labelDraft.trim().toLowerCase().replace(/\s+/g, '-');
+        if (!next) return;
+        const current = item.labels || [];
+        if (current.includes(next)) { setLabelDraft(''); return; }
+        const updated = [...current, next];
+        setTriageUpdating(true);
+        try {
+            await updateFeedbackTriage(item.id, { labels: updated });
+            setItem(prev => prev ? { ...prev, labels: updated } : null);
+            setLabelDraft('');
+        } catch (err: any) {
+            setError(err.message || 'Failed to add label');
+        }
+        setTriageUpdating(false);
+    };
+
+    const handleRemoveLabel = async (label: string) => {
+        if (!item) return;
+        const updated = (item.labels || []).filter(l => l !== label);
+        setTriageUpdating(true);
+        try {
+            await updateFeedbackTriage(item.id, { labels: updated });
+            setItem(prev => prev ? { ...prev, labels: updated } : null);
+        } catch (err: any) {
+            setError(err.message || 'Failed to remove label');
+        }
+        setTriageUpdating(false);
+    };
 
     const handleStatusChange = async (newStatus: string) => {
         if (!item) return;
@@ -55,6 +111,13 @@ export function FeedbackDetailPage() {
     const networkErrors = context.networkErrors || [];
     const breadcrumbs = context.breadcrumbs || [];
     const screenshots = Array.isArray(item.screenshots) ? item.screenshots : [];
+
+    // Split breadcrumbs into "where the user was" vs "what they did".
+    // The spec calls navigation history out as a top-level differentiator,
+    // so it gets its own panel; everything else (clicks, custom events)
+    // stays in the User Actions panel below.
+    const navigationSteps = breadcrumbs.filter((b: any) => b.type === 'navigation');
+    const userActions = breadcrumbs.filter((b: any) => b.type !== 'navigation');
 
     return (
         <LayoutWrapper>
@@ -151,6 +214,151 @@ export function FeedbackDetailPage() {
                 </div>
             </GlassCard>
 
+            {/* Session & Identity (Tier 1) — shows data captured via the
+                sessionProvider contract (PostHog / LogRocket / FullStory).
+                Card is invisible when no session metadata was captured,
+                so it never clutters the layout for session-less submissions. */}
+            {(item.session_replay_url || item.session_id || (item.user_properties && Object.keys(item.user_properties).length > 0)) && (
+                <GlassCard title="Session & Identity">
+                    <div className="space-y-3">
+                        {item.session_replay_url && (
+                            <a
+                                href={item.session_replay_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 rounded-lg shadow-sm transition-all"
+                            >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                View session replay
+                                {item.session_provider && (
+                                    <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">
+                                        · {item.session_provider}
+                                    </span>
+                                )}
+                            </a>
+                        )}
+                        {(item.session_id || item.session_provider) && (
+                            <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">
+                                {item.session_id && <span>session: {item.session_id}</span>}
+                            </div>
+                        )}
+                        {item.user_properties && Object.keys(item.user_properties).length > 0 && (
+                            <div className="pt-3 mt-3 border-t border-gray-100 dark:border-white/5">
+                                <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                                    User properties
+                                </p>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                    {Object.entries(item.user_properties).map(([key, value]) => (
+                                        <div key={key}>
+                                            <p className="text-[11px] text-gray-400 truncate">{key}</p>
+                                            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate" title={String(value ?? '')}>
+                                                {value == null
+                                                    ? <span className="text-gray-300 dark:text-gray-600">—</span>
+                                                    : typeof value === 'object'
+                                                        ? <code className="text-[11px]">{JSON.stringify(value)}</code>
+                                                        : String(value)}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </GlassCard>
+            )}
+
+            {/* Triage (P3) — priority + labels. Separate card so it visually
+                anchors the workflow: pick priority, tag with labels, then
+                resolve via the status controls above. */}
+            <GlassCard title="Triage">
+                <div className="space-y-4">
+                    {/* Priority */}
+                    <div>
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Priority</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {PRIORITY_OPTIONS.map(opt => {
+                                const isActive = item.priority === opt.value;
+                                return (
+                                    <button
+                                        key={opt.value}
+                                        onClick={() => handlePriorityChange(opt.value)}
+                                        disabled={triageUpdating}
+                                        className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all disabled:opacity-50 ${
+                                            isActive
+                                                ? `${opt.chip} border-transparent`
+                                                : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:border-gray-300'
+                                        }`}
+                                        title={isActive ? 'Click to clear priority' : `Set priority to ${opt.label}`}
+                                    >
+                                        <span className={`w-2 h-2 rounded-full ${opt.dot}`} />
+                                        {opt.label}
+                                    </button>
+                                );
+                            })}
+                            {item.priority == null && (
+                                <span className="text-xs text-gray-400 ml-1">— not prioritised</span>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Labels */}
+                    <div>
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Labels</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {(item.labels || []).map(label => (
+                                <span
+                                    key={label}
+                                    className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                                >
+                                    <span>{label}</span>
+                                    <button
+                                        onClick={() => handleRemoveLabel(label)}
+                                        disabled={triageUpdating}
+                                        className="w-4 h-4 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-red-500 disabled:opacity-50"
+                                        title={`Remove "${label}"`}
+                                    >
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </span>
+                            ))}
+                            <div className="flex items-center gap-1">
+                                <input
+                                    type="text"
+                                    placeholder="Add label…"
+                                    value={labelDraft}
+                                    onChange={(e) => setLabelDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleAddLabel();
+                                        }
+                                    }}
+                                    disabled={triageUpdating}
+                                    maxLength={40}
+                                    className="px-2.5 py-1 text-xs border border-dashed border-gray-300 dark:border-gray-600 rounded-full bg-transparent text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:border-amber-500 focus:border-solid disabled:opacity-50 w-32"
+                                />
+                                <button
+                                    onClick={handleAddLabel}
+                                    disabled={triageUpdating || !labelDraft.trim()}
+                                    className="text-xs font-semibold text-amber-500 hover:text-amber-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+                        {(item.labels?.length ?? 0) === 0 && !labelDraft && (
+                            <p className="text-[11px] text-gray-400 mt-1">
+                                Short tags like <code>backend</code>, <code>duplicate</code>, <code>ux-bug</code>. Spaces become hyphens.
+                            </p>
+                        )}
+                    </div>
+                </div>
+            </GlassCard>
+
             {screenshots.length > 0 && (
                 <GlassCard title={`Screenshots (${screenshots.length})`}>
                     <div className="flex gap-3 flex-wrap">
@@ -230,15 +438,78 @@ export function FeedbackDetailPage() {
                 </GlassCard>
             )}
 
-            {breadcrumbs.length > 0 && (
-                <GlassCard title={`User Actions (${breadcrumbs.length})`}>
+            {/* Navigation Path — the route the user took before the issue.
+                Filtered from breadcrumbs (type='navigation'), rendered as
+                an ordered step list with timestamps + relative gaps so a
+                developer can see "where were they 30s before they clicked
+                Submit." Surfaces the spec's navigation-history differentiator. */}
+            {navigationSteps.length > 0 && (
+                <GlassCard title={`Navigation Path (${navigationSteps.length})`}>
+                    <ol className="relative border-l-2 border-purple-200 dark:border-purple-500/30 ml-3 space-y-3 py-1">
+                        {navigationSteps.map((step: any, i: number) => {
+                            const isFirst = i === 0;
+                            const isLast = i === navigationSteps.length - 1;
+                            const prevStep = i > 0 ? navigationSteps[i - 1] : null;
+                            const gapMs = prevStep
+                                ? new Date(step.timestamp).getTime() - new Date(prevStep.timestamp).getTime()
+                                : 0;
+                            const gap = formatGap(gapMs);
+                            const target: string = step.target || '/';
+                            const target_meta = step.metadata || {};
+                            const fromTo = target_meta.from && target_meta.to
+                                ? `${target_meta.from} → ${target_meta.to}`
+                                : null;
+                            return (
+                                <li key={i} className="ml-5 relative">
+                                    {/* step dot */}
+                                    <span className={`absolute -left-[1.55rem] top-1 w-3 h-3 rounded-full ring-2 ring-white dark:ring-gray-900 ${
+                                        isLast
+                                            ? 'bg-amber-500'
+                                            : 'bg-purple-400 dark:bg-purple-500'
+                                    }`} />
+                                    <div className="flex items-baseline justify-between gap-2">
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                                {target}
+                                            </p>
+                                            {fromTo && (
+                                                <p className="text-xs text-gray-400 truncate font-mono mt-0.5">
+                                                    {fromTo}
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-col items-end shrink-0">
+                                            <span className="text-xs text-gray-400 font-mono">
+                                                {new Date(step.timestamp).toLocaleTimeString()}
+                                            </span>
+                                            {!isFirst && gap && (
+                                                <span className="text-[10px] text-gray-400 mt-0.5">
+                                                    +{gap}
+                                                </span>
+                                            )}
+                                            {isLast && (
+                                                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold mt-0.5 uppercase tracking-wider">
+                                                    where issue happened
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ol>
+                </GlassCard>
+            )}
+
+            {userActions.length > 0 && (
+                <GlassCard title={`User Actions (${userActions.length})`}>
                     <div className="space-y-1">
-                        {breadcrumbs.map((b: any, i: number) => (
+                        {userActions.map((b: any, i: number) => (
                             <div key={i} className="flex items-baseline gap-2 text-sm">
                                 <span className="text-xs text-gray-400 font-mono w-16 shrink-0">
                                     {new Date(b.timestamp).toLocaleTimeString()}
                                 </span>
-                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${b.type === 'click' ? 'bg-blue-100 text-blue-600' : b.type === 'navigation' ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-600'}`}>
+                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${b.type === 'click' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'}`}>
                                     {b.type}
                                 </span>
                                 <span className="text-gray-600 dark:text-gray-400 truncate text-xs">
@@ -280,4 +551,17 @@ function MetaItem({ label, value }: { label: string; value: string | null | unde
             </p>
         </div>
     );
+}
+
+/** Render a millisecond gap between navigation steps as a short
+ *  human-readable label: "2s", "47s", "3m", "1h 12m". */
+function formatGap(ms: number): string {
+    if (!ms || ms < 1000) return '';
+    const sec = Math.round(ms / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.round(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    const remMin = min % 60;
+    return remMin ? `${hr}h ${remMin}m` : `${hr}h`;
 }

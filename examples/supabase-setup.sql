@@ -280,6 +280,23 @@ ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolved_by TEXT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS resolution_note TEXT;
 
+-- Triage fields (P3) — labels array + priority enum. Additive, safe re-run.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS labels TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS priority TEXT;
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_priority_check;
+ALTER TABLE feedback ADD CONSTRAINT feedback_priority_check
+  CHECK (priority IN ('low', 'medium', 'high', 'urgent') OR priority IS NULL);
+CREATE INDEX IF NOT EXISTS idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_labels ON feedback USING GIN (labels);
+
+-- Session provider fields (Tier 1) — populated by the sessionProvider
+-- contract on FeedbackProvider when a host configures PostHog etc.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_id TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_provider TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS session_replay_url TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS user_properties JSONB;
+CREATE INDEX IF NOT EXISTS idx_feedback_session_id ON feedback(session_id) WHERE session_id IS NOT NULL;
+
 ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_status_check;
 ALTER TABLE feedback ADD CONSTRAINT feedback_status_check
   CHECK (status IN ('open', 'in_progress', 'resolved', 'closed'));
@@ -560,6 +577,65 @@ DROP TRIGGER IF EXISTS on_notification_pg_notify ON public.notifications;
 CREATE TRIGGER on_notification_pg_notify
   AFTER INSERT ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.notify_new_notification();
+
+-- ============================================================
+-- P4: Feedback loop health function — see server/init.sql for
+-- detailed docs. Safe to re-run; replaces the function definition.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.feedback_loop_health(p_project_id TEXT DEFAULT NULL)
+RETURNS TABLE (
+  avg_resolution_hours NUMERIC,
+  pct_closed_14d       NUMERIC,
+  return_rate          NUMERIC,
+  total_30d            BIGINT,
+  resolved_30d         BIGINT,
+  unique_submitters_90d BIGINT,
+  returning_submitters_90d BIGINT
+) AS $$
+  WITH recent AS (
+    SELECT *
+      FROM public.feedback
+     WHERE (p_project_id IS NULL OR project_id = p_project_id)
+       AND created_at > NOW() - INTERVAL '30 days'
+  ),
+  recent_resolved AS (
+    SELECT *
+      FROM recent
+     WHERE status IN ('resolved', 'closed')
+       AND resolved_at IS NOT NULL
+  ),
+  submitters AS (
+    SELECT user_id, COUNT(*) AS n
+      FROM public.feedback
+     WHERE (p_project_id IS NULL OR project_id = p_project_id)
+       AND created_at > NOW() - INTERVAL '90 days'
+       AND user_id IS NOT NULL
+       AND user_id <> ''
+     GROUP BY user_id
+  )
+  SELECT
+    (SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600.0)
+       FROM recent_resolved)                                                AS avg_resolution_hours,
+    (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
+                 ELSE ROUND(100.0 * SUM(CASE
+                     WHEN status IN ('resolved','closed')
+                      AND resolved_at IS NOT NULL
+                      AND (resolved_at - created_at) <= INTERVAL '14 days'
+                     THEN 1 ELSE 0 END) / COUNT(*), 1)
+            END
+       FROM recent)                                                         AS pct_closed_14d,
+    (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
+                 ELSE ROUND(100.0 * SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END)
+                              / COUNT(*), 1)
+            END
+       FROM submitters)                                                     AS return_rate,
+    (SELECT COUNT(*) FROM recent)::BIGINT                                    AS total_30d,
+    (SELECT COUNT(*) FROM recent_resolved)::BIGINT                           AS resolved_30d,
+    (SELECT COUNT(*) FROM submitters)::BIGINT                                AS unique_submitters_90d,
+    (SELECT COUNT(*) FROM submitters WHERE n > 1)::BIGINT                    AS returning_submitters_90d;
+$$ LANGUAGE sql STABLE;
+
+GRANT EXECUTE ON FUNCTION public.feedback_loop_health(TEXT) TO authenticated, service_role;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id);

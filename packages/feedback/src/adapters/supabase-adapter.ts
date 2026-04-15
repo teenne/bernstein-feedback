@@ -330,7 +330,7 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
                 // 1. Prepare Core Feedback payload
                 const feedbackId = crypto.randomUUID();
                 
-                const feedbackPayload = {
+                const feedbackPayload: Record<string, unknown> = {
                     id: feedbackId,
                     project_id: event.project_id,
                     type: event.type,
@@ -350,6 +350,13 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
                     tenant_id: event.tenant_id,
                     role: event.role,
                     metadata: event.metadata,
+                    // Session provider fields (Tier 1). Only include keys
+                    // that are actually set so the DB sees NULL for missing
+                    // fields (rather than JSON 'undefined' errors).
+                    ...(event.session_id ? { session_id: event.session_id } : {}),
+                    ...(event.session_provider ? { session_provider: event.session_provider } : {}),
+                    ...(event.session_replay_url ? { session_replay_url: event.session_replay_url } : {}),
+                    ...(event.user_properties ? { user_properties: event.user_properties } : {}),
                 };
 
                 // 2. Prepare Technical Context payload (Heavy Data)

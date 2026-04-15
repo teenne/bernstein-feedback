@@ -40,9 +40,58 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
   });
 
   const [isHidingForCapture, setIsHidingForCapture] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [highlightedElement, setHighlightedElement] = useState<any>();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Track auto-capture per-open so we don't redo it on every render.
+  const hasAutoCapturedRef = useRef(false);
   // No baseImage needed before selection
+
+  /**
+   * Take a screenshot of the page using html2canvas. The dialog hides
+   * itself first via the existing `isHidingForCapture` opacity toggle —
+   * we wait for the 200ms fade-out + a paint frame before capturing so
+   * nothing of the dialog ends up in the image.
+   *
+   * Result is appended to formState.screenshots as a data URL.
+   * On any failure (CORS, missing dep, runtime error) we silently bail
+   * out so the user can still upload manually or just submit without
+   * a screenshot.
+   */
+  const captureScreenshot = async (): Promise<void> => {
+    if (isCapturing) return;
+    setIsCapturing(true);
+    setIsHidingForCapture(true);
+    try {
+      // Let the opacity transition + browser paint complete
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      // Lazy-load html2canvas so it isn't pulled into the initial bundle
+      // unless someone actually opens the widget.
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(document.body, {
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        // Cap the size so we don't ship multi-megabyte PNGs over SMTP.
+        // 0.85 quality JPEG keeps it under ~200 KB for a typical viewport.
+        scale: Math.min(1, window.devicePixelRatio || 1),
+      });
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+      setFormState(prev => ({
+        ...prev,
+        screenshots: [...prev.screenshots, dataUrl],
+        includeScreenshot: true,
+      }));
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[Feedback] Auto-screenshot failed:', err);
+    } finally {
+      setIsHidingForCapture(false);
+      setIsCapturing(false);
+    }
+  };
 
   // Get recent steps from context for bug reports
   const context = captureContext();
@@ -60,8 +109,27 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
         includeScreenshot: !!initialFormState.screenshots?.length,
         screenshots: initialFormState.screenshots || [],
       });
+      // Allow auto-capture again on the next open.
+      hasAutoCapturedRef.current = false;
     }
   }, [isOpen, initialFormState]);
+
+  // Auto-capture a screenshot once when the dialog opens, unless the
+  // host disabled it via config or the form already has a screenshot
+  // (e.g. one passed in via initialFormState or via openBugReport).
+  // `autoScreenshot` defaults to true if omitted from config.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (hasAutoCapturedRef.current) return;
+    if (config.autoScreenshot === false) return;
+    if (initialFormState.screenshots && initialFormState.screenshots.length > 0) return;
+
+    hasAutoCapturedRef.current = true;
+    captureScreenshot();
+    // captureScreenshot is stable for our purposes; we only want this
+    // to fire on the open transition, not on every state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleTabChange = (value: string) => {
     const type = value as FeedbackType;
@@ -212,21 +280,53 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
   };
 
 
+  // Combined visibility flag for the dialog chrome.
+  // - `isHidingForCapture` covers the explicit hide that captureScreenshot()
+  //   and handleHighlight() trigger.
+  // - The second clause covers the FIRST render after isOpen flips to true:
+  //   if an auto-capture is about to happen on this open, we render the
+  //   dialog already invisible so it doesn't flash on screen, then fade
+  //   it in once the capture completes. Without this, the user sees the
+  //   dialog appear → vanish → reappear, which reads as "two dialogs."
+  const willAutoCaptureNow =
+    isOpen
+    && config.autoScreenshot !== false
+    && !hasAutoCapturedRef.current
+    && !(initialFormState.screenshots && initialFormState.screenshots.length > 0)
+    && formState.screenshots.length === 0;
+  const dialogHidden = isHidingForCapture || willAutoCaptureNow;
+
   return (
     <FeedbackErrorBoundary>
       <Dialog.Root open={isOpen} onOpenChange={(open: boolean) => !open && close()}>
         <Dialog.Portal container={portalContainer}>
           <Dialog.Overlay
-            className={`bf-fixed bf-inset-0 bf-bg-black/50 bf-animate-fade-in bf-z-[9998] bf-transition-opacity bf-duration-200 ${isHidingForCapture ? 'bf-opacity-0 bf-pointer-events-none' : 'bf-opacity-100'}`}
+            // The bf-animate-fade-in keyframe animation overrides static
+            // opacity classes, so we have to conditionally APPLY it only
+            // when the dialog is meant to be visible. Otherwise it forces
+            // opacity:1 even while we're trying to hide for capture, which
+            // produces a "double dialog" flash on open.
+            // Inline style as a final guarantee — wins over any class.
+            className={`bf-fixed bf-inset-0 bf-bg-black/50 bf-z-[9998] bf-transition-opacity bf-duration-200 ${dialogHidden ? 'bf-pointer-events-none' : 'bf-animate-fade-in'}`}
+            style={{ opacity: dialogHidden ? 0 : undefined, animation: dialogHidden ? 'none' : undefined }}
             data-html2canvas-ignore="true"
             data-bernstein-dialog-overlay="true"
           />
           <Dialog.Content
-            className={`bf-fixed bf-bottom-0 bf-left-0 bf-w-full bf-max-w-[95vw] bf-mx-auto bf-max-h-[90vh] bf-bg-feedback-bg bf-rounded-t-2xl bf-z-[9999] bf-p-4 md:bf-top-1/2 md:bf-left-1/2 md:bf-bottom-auto md:bf-w-full md:bf-max-w-md md:bf-max-h-[85vh] md:bf-rounded-2xl md:bf-p-6 bf-overflow-y-auto bf-transition-opacity bf-duration-200 ${isHidingForCapture ? 'bf-opacity-0 bf-pointer-events-none' : 'bf-opacity-100'}`}
+            className={`bf-fixed bf-bottom-0 bf-left-0 bf-w-full bf-max-w-[95vw] bf-mx-auto bf-max-h-[90vh] bf-bg-feedback-bg bf-rounded-t-2xl bf-z-[9999] bf-p-4 md:bf-top-1/2 md:bf-left-1/2 md:bf-bottom-auto md:bf-w-full md:bf-max-w-md md:bf-max-h-[85vh] md:bf-rounded-2xl md:bf-p-6 bf-overflow-y-auto bf-transition-opacity bf-duration-200 ${dialogHidden ? 'bf-pointer-events-none' : ''}`}
             style={{
               transform: window.innerWidth >= 768 ? 'translate(-50%, -50%)' : 'none',
               boxShadow: 'var(--feedback-shadow, 0 25px 50px -12px rgba(0, 0, 0, 0.25))',
-              animation: window.innerWidth >= 768 ? 'dialogSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)' : 'dialogSlideInBottom 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+              // While hiding for capture: kill BOTH the slide-in animation
+              // (which animates opacity from 0 → 1) AND any class-based opacity
+              // by force-setting opacity:0 inline. Without this, the dialog
+              // briefly appears even though we asked it to hide.
+              opacity: dialogHidden ? 0 : undefined,
+              animation: dialogHidden
+                ? 'none'
+                : window.innerWidth >= 768
+                  ? 'dialogSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+                  : 'dialogSlideInBottom 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
             }}
             data-html2canvas-ignore="true"
             data-bernstein-dialog-content="true"
@@ -565,6 +665,21 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                           accept="image/*"
                           className="bf-hidden"
                         />
+                        {config.autoScreenshot !== false && (
+                          <button
+                            type="button"
+                            onClick={captureScreenshot}
+                            disabled={isCapturing}
+                            title="Take a fresh screenshot of the current page"
+                            className="bf-flex bf-items-center bf-gap-2 bf-px-3 bf-py-1.5 bf-text-xs bf-font-semibold bf-text-feedback-primary bf-bg-feedback-primary/5 hover:bf-bg-feedback-primary/10 bf-rounded-full bf-transition-all bf-border bf-border-feedback-primary/20 disabled:bf-opacity-50 disabled:bf-cursor-not-allowed"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                              <circle cx="12" cy="13" r="4" />
+                            </svg>
+                            {isCapturing ? 'Capturing…' : (formState.screenshots.length > 0 ? 'Retake' : 'Capture')}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => fileInputRef.current?.click()}
@@ -602,6 +717,18 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                     {uploadError && (
                       <div className="bf-p-2 bf-bg-red-50 bf-border bf-border-red-200 bf-rounded bf-text-xs bf-text-red-600 bf-animate-fade-in">
                         {uploadError}
+                      </div>
+                    )}
+
+                    {/* Capturing placeholder — shown while html2canvas runs
+                        so users get visual confirmation something is happening. */}
+                    {isCapturing && formState.screenshots.length === 0 && (
+                      <div className="bf-flex bf-gap-2 bf-pb-2 bf-mt-1">
+                        <div className="bf-w-24 bf-h-16 bf-rounded-lg bf-border bf-border-feedback-border bf-bg-feedback-primary/5 bf-flex bf-items-center bf-justify-center bf-animate-pulse">
+                          <span className="bf-text-[10px] bf-text-feedback-primary bf-font-semibold">
+                            Capturing…
+                          </span>
+                        </div>
                       </div>
                     )}
 

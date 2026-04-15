@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects, fetchProjectUsage } from '../lib/feedbackApi';
+import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects, fetchProjectUsage, fetchLoopHealth, type LoopHealthData } from '../lib/feedbackApi';
 import { useAuth } from '../hooks/useAuth';
 import { useFeedback } from 'akk-feedback';
 import { LayoutWrapper } from '../components/LayoutWrapper';
@@ -16,6 +16,7 @@ export function StatsPage() {
     const [userProjects, setUserProjects] = useState<string[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
     const [usage, setUsage] = useState<UsageData | null>(null);
+    const [health, setHealth] = useState<LoopHealthData | null>(null);
 
     const { isAdmin } = useAuth();
     const { lastReportId } = useFeedback();
@@ -60,6 +61,16 @@ export function StatsPage() {
                     } catch {
                         // Usage fetch is non-critical
                     }
+                }
+
+                // Fetch loop-health in parallel — non-critical, never blocks the page.
+                // Use the selected project scope, or null for "all projects" view.
+                try {
+                    const healthData = await fetchLoopHealth(selectedProject || null);
+                    setHealth(healthData);
+                } catch {
+                    // Non-critical — card is hidden if data fails
+                    setHealth(null);
                 }
             } catch (err: any) {
                 setError(err.message || 'Failed to load stats');
@@ -159,6 +170,15 @@ export function StatsPage() {
                     </GlassCard>
                 )}
 
+                {/* P4: Feedback Loop Health — three traffic-light metrics that surface
+                    the spec's "developer accountability to the feedback loop" signal.
+                    Amber / red overall status triggers a nudge to close tickets. */}
+                {health && (
+                    <GlassCard title="Feedback Loop Health">
+                        <LoopHealthCard data={health} />
+                    </GlassCard>
+                )}
+
                 <div className="grid md:grid-cols-2 gap-6">
                     {/* By Type */}
                     <GlassCard title="By Type">
@@ -232,5 +252,122 @@ export function StatsPage() {
                 </div>
             </div>
         </LayoutWrapper>
+    );
+}
+
+// ====================================================================
+// Loop Health card (P4)
+// ====================================================================
+
+type HealthStatus = 'green' | 'amber' | 'red' | 'unknown';
+
+const STATUS_STYLE: Record<HealthStatus, { dot: string; text: string; bg: string; label: string }> = {
+    green:   { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-500/10', label: 'Healthy' },
+    amber:   { dot: 'bg-amber-500',   text: 'text-amber-600 dark:text-amber-400',   bg: 'bg-amber-50 dark:bg-amber-500/10',   label: 'Needs attention' },
+    red:     { dot: 'bg-red-500',     text: 'text-red-600 dark:text-red-400',       bg: 'bg-red-50 dark:bg-red-500/10',       label: 'Loop is broken' },
+    unknown: { dot: 'bg-gray-300',    text: 'text-gray-400',                         bg: 'bg-gray-50 dark:bg-white/5',         label: 'No data yet' },
+};
+
+function formatHours(h: number | null): string {
+    if (h == null) return '—';
+    if (h < 1) return `${Math.round(h * 60)}m`;
+    if (h < 48) return `${Math.round(h)}h`;
+    return `${Math.round(h / 24)}d`;
+}
+
+function formatPercent(p: number | null): string {
+    if (p == null) return '—';
+    return `${Math.round(p)}%`;
+}
+
+function LoopHealthCard({ data }: { data: LoopHealthData }) {
+    const { metrics, status, counts } = data;
+    const overall = STATUS_STYLE[status.overall];
+
+    // Nudge copy comes from the spec: when return_rate or pct_closed_14d
+    // dips, close a few tickets to rebuild engagement.
+    const showNudge = status.overall === 'amber' || status.overall === 'red';
+
+    return (
+        <div className="space-y-4">
+            {/* Overall status strip */}
+            <div className={`flex items-center justify-between px-4 py-3 rounded-lg ${overall.bg}`}>
+                <div className="flex items-center gap-3">
+                    <span className={`inline-block w-3 h-3 rounded-full ${overall.dot}`} />
+                    <span className={`text-sm font-semibold ${overall.text}`}>{overall.label}</span>
+                </div>
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                    Last 30 days · {counts.total_30d} submission{counts.total_30d === 1 ? '' : 's'}
+                </span>
+            </div>
+
+            {/* Three metric tiles */}
+            <div className="grid md:grid-cols-3 gap-3">
+                <MetricTile
+                    label="Avg resolution time"
+                    value={formatHours(metrics.avg_resolution_hours)}
+                    hint={`${counts.resolved_30d} resolved in 30d`}
+                    status={status.avg_resolution}
+                />
+                <MetricTile
+                    label="Resolved in 14 days"
+                    value={formatPercent(metrics.pct_closed_14d)}
+                    hint="of last 30 days"
+                    status={status.pct_closed_14d}
+                />
+                <MetricTile
+                    label="Return rate"
+                    value={formatPercent(metrics.return_rate)}
+                    hint={`${counts.returning_submitters_90d} / ${counts.unique_submitters_90d} returning`}
+                    status={status.return_rate}
+                />
+            </div>
+
+            {/* Amber/red nudge — the spec calls this out as the
+                "developer accountability" moment. */}
+            {showNudge && (
+                <div className={`px-4 py-3 rounded-lg border ${
+                    status.overall === 'red'
+                        ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30'
+                        : 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30'
+                }`}>
+                    <p className={`text-sm font-semibold ${
+                        status.overall === 'red'
+                            ? 'text-red-700 dark:text-red-300'
+                            : 'text-amber-700 dark:text-amber-300'
+                    }`}>
+                        Close a few tickets to rebuild engagement.
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Users come back when they see their submissions acted on.
+                        Resolving open tickets (and adding resolution notes) brings
+                        users back into the loop.
+                    </p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function MetricTile({
+    label, value, hint, status,
+}: {
+    label: string;
+    value: string;
+    hint: string;
+    status: HealthStatus;
+}) {
+    const s = STATUS_STYLE[status];
+    return (
+        <div className="p-4 rounded-xl border border-gray-100 dark:border-white/5 bg-white/50 dark:bg-white/[0.02]">
+            <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{label}</p>
+                <span className={`inline-block w-2 h-2 rounded-full ${s.dot}`} title={s.label} />
+            </div>
+            <p className={`text-2xl font-bold mt-1.5 ${status === 'unknown' ? 'text-gray-300 dark:text-gray-600' : 'text-gray-900 dark:text-white'}`}>
+                {value}
+            </p>
+            <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">{hint}</p>
+        </div>
     );
 }

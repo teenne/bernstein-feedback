@@ -15,17 +15,30 @@ let shuttingDown = false;
 let reconnectMs = RECONNECT_MIN_MS;
 
 function resolveConnection(): string | undefined {
-    // Mirror db.ts's detection: ignore placeholder URLs, prefer DATABASE_URL.
-    const url = process.env.DATABASE_URL;
-    if (url && url.trim() && !/<[^>]*>/.test(url)) return url;
+    // Mirror db.ts logic
+    const DB_MODE = process.env.DB_MODE?.toLowerCase() || 
+        (process.env.DATABASE_URL || process.env.DATABASE_SUP_URL ? "cloud" : "local");
+    
+    if (DB_MODE === "memory") return undefined;
 
-    const host = process.env.DB_HOST;
-    const user = process.env.DB_USER;
-    if (!host || !user) return undefined;
-    const port = process.env.DB_PORT || '5432';
-    const pass = process.env.DB_PASSWORD || '';
-    const db = process.env.DB_NAME || 'postgres';
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
+    const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+    const isPlaceholder = (s: string) => /<[^>]*>/.test(s);
+
+    if (DB_MODE === "cloud" && url && url.trim() && !isPlaceholder(url)) {
+        return url;
+    }
+
+    if (DB_MODE === "local") {
+        const host = process.env.DB_HOST;
+        const user = process.env.DB_USER;
+        if (!host || !user) return undefined;
+        const port = process.env.DB_PORT || '5432';
+        const pass = process.env.DB_PASSWORD || '';
+        const db = process.env.DB_NAME || 'postgres';
+        return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
+    }
+
+    return undefined;
 }
 
 async function connect(): Promise<void> {

@@ -20,6 +20,7 @@ export function FeedbackListPage() {
     const typeFilter = searchParams.get('type') || '';
     const projectFilter = searchParams.get('project_id') || '';
     const statusFilter = searchParams.get('status') || '';
+    const priorityFilter = searchParams.get('priority') || '';
 
     const { isAdmin } = useAuth();
 
@@ -36,6 +37,7 @@ export function FeedbackListPage() {
                     type: typeFilter || undefined,
                     project_id: projectFilter || undefined,
                     status: statusFilter || undefined,
+                    priority: priorityFilter || undefined,
                     limit: 100,
                 }),
             ]);
@@ -56,7 +58,7 @@ export function FeedbackListPage() {
 
     useEffect(() => {
         fetchData();
-    }, [typeFilter, projectFilter, statusFilter]);
+    }, [typeFilter, projectFilter, statusFilter, priorityFilter]);
 
     const setFilter = (key: string, value: string) => {
         const next = new URLSearchParams(searchParams);
@@ -132,6 +134,17 @@ export function FeedbackListPage() {
                         <option value="resolved">Resolved</option>
                         <option value="closed">Closed</option>
                     </select>
+                    <select
+                        value={priorityFilter}
+                        onChange={e => setFilter('priority', e.target.value)}
+                        className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 rounded-xl bg-white/80 dark:bg-white/5 backdrop-blur-md text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                    >
+                        <option value="">All Priorities</option>
+                        <option value="urgent">Urgent</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                    </select>
                 </div>
 
                 {error && <ErrorMessage message={error} />}
@@ -160,6 +173,7 @@ export function FeedbackListPage() {
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-gray-200 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.02]">
+                                    <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider w-8" title="Priority" />
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Type</th>
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Title</th>
                                     <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">Submitted By</th>
@@ -179,6 +193,19 @@ export function FeedbackListPage() {
                                             onClick={() => navigate(`/feedback/${item.id}`)}
                                             className="border-b border-gray-100 dark:border-white/5 last:border-0 hover:bg-amber-50/50 dark:hover:bg-amber-500/5 cursor-pointer transition-colors"
                                         >
+                                            {/* Priority dot — silent when unset so the column is a subtle signal.
+                                                 Color matches the PRIORITY_OPTIONS map on the detail page. */}
+                                            <td className="pl-5 pr-2 py-3.5" title={item.priority ? `Priority: ${item.priority}` : 'No priority set'}>
+                                                <span
+                                                    className={`inline-block w-2.5 h-2.5 rounded-full ${
+                                                        item.priority === 'urgent' ? 'bg-red-500' :
+                                                        item.priority === 'high'   ? 'bg-amber-500' :
+                                                        item.priority === 'medium' ? 'bg-blue-500' :
+                                                        item.priority === 'low'    ? 'bg-gray-400' :
+                                                        'bg-transparent border border-gray-200 dark:border-white/10'
+                                                    }`}
+                                                />
+                                            </td>
                                             <td className="px-5 py-3.5">
                                                 <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${typeConfig.color} ${typeConfig.darkColor}`}>
                                                     {typeConfig.label}
@@ -188,6 +215,21 @@ export function FeedbackListPage() {
                                                 <p className="font-medium text-gray-900 dark:text-gray-100">{item.title}</p>
                                                 {item.description && (
                                                     <p className="text-gray-400 dark:text-gray-500 text-xs mt-0.5 truncate max-w-md">{item.description}</p>
+                                                )}
+                                                {(item.labels?.length ?? 0) > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                                        {item.labels!.slice(0, 5).map(label => (
+                                                            <span
+                                                                key={label}
+                                                                className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-gray-400"
+                                                            >
+                                                                {label}
+                                                            </span>
+                                                        ))}
+                                                        {item.labels!.length > 5 && (
+                                                            <span className="text-[10px] text-gray-400">+{item.labels!.length - 5}</span>
+                                                        )}
+                                                    </div>
                                                 )}
                                             </td>
                                             <td className="px-5 py-3.5">

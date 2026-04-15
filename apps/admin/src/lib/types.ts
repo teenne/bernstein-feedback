@@ -10,6 +10,8 @@ export interface Project {
     created_at: string;
 }
 
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'urgent';
+
 export interface FeedbackItem {
     id: string;
     project_id: string;
@@ -24,6 +26,9 @@ export interface FeedbackItem {
     screenshots: string | string[] | null;
     status: string | null;
     resolved_at: string | null;
+    // Triage fields (P3)
+    labels?: string[] | null;
+    priority?: FeedbackPriority | null;
     created_at: string;
 }
 
@@ -37,6 +42,11 @@ export interface FeedbackDetail extends FeedbackItem {
     page_name: string | null;
     resolved_by: string | null;
     resolution_note: string | null;
+    // Session provider fields (Tier 1)
+    session_id?: string | null;
+    session_provider?: string | null;
+    session_replay_url?: string | null;
+    user_properties?: Record<string, unknown> | null;
 }
 
 export interface Stats {

@@ -451,6 +451,32 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           viewport: formState.includeTechnicalDetails ? fullContext.viewport : { width: 0, height: 0 },
         };
 
+        // (Tier 1) Capture session metadata from the analytics provider.
+        // Wrapped in try/catch so a broken provider can never block a
+        // feedback submission. Fails silent → event submitted without
+        // the session fields, same as if no provider were configured.
+        let sessionMeta: {
+          session_id?: string;
+          session_provider?: string;
+          session_replay_url?: string;
+          user_properties?: Record<string, unknown>;
+        } = {};
+        if (config.sessionProvider) {
+          try {
+            const sid = config.sessionProvider.getSessionId() ?? undefined;
+            const props = config.sessionProvider.getUserProperties() ?? undefined;
+            const replay = sid ? (config.sessionProvider.getReplayUrl(sid) ?? undefined) : undefined;
+            sessionMeta = {
+              session_id: sid || undefined,
+              session_provider: sid ? config.sessionProvider.name : undefined,
+              session_replay_url: replay || undefined,
+              user_properties: props || undefined,
+            };
+          } catch (err) {
+            console.warn('[Feedback] sessionProvider threw — skipping session metadata:', err);
+          }
+        }
+
         const event: FeedbackEvent = {
           type: formState.type,
           project_id: config.projectId,
@@ -476,6 +502,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           role: config.role,
           bernstein_run_id: config.bernsteinRunId,
           metadata: config.metadata,
+          ...sessionMeta,
         };
 
         const result = await config.adapter.submit(event);

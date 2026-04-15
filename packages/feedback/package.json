@@ -1,6 +1,6 @@
 {
   "name": "akk-feedback",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Drop-in feedback widget for React apps with automatic context capture",
   "type": "module",
   "main": "./dist/index.cjs",

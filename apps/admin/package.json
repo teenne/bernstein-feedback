@@ -14,7 +14,7 @@
     "test:report": "npx playwright show-report"
   },
   "dependencies": {
-    "akk-feedback": "1.2.2",
+    "akk-feedback": "1.2.3",
     "@supabase/supabase-js": "^2.95.3",
     "@supabase/auth-ui-react": "^0.4.7",
     "@supabase/auth-ui-shared": "^0.1.8",

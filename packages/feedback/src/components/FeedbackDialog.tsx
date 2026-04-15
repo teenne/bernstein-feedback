@@ -64,19 +64,37 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     setIsHidingForCapture(true);
     try {
       // Let the opacity transition + browser paint complete
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-      // Lazy-load html2canvas so it isn't pulled into the initial bundle
-      // unless someone actually opens the widget.
-      const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(document.body, {
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-        // Cap the size so we don't ship multi-megabyte PNGs over SMTP.
-        // 0.85 quality JPEG keeps it under ~200 KB for a typical viewport.
-        scale: Math.min(1, window.devicePixelRatio || 1),
+      const { toCanvas } = await import('html-to-image');
+      const canvas = await toCanvas(document.body, {
+        pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
+        backgroundColor: '#ffffff',
+        skipFonts: true, // Prevent reading cross-origin font rules (fixes SecurityError)
+        // Filter out the widget itself and problematic external stylesheets
+        filter: (node) => {
+          const el = node as HTMLElement;
+          
+          // 1. Always hide the feedback widget itself
+          if (el.id === 'bernstein-widget-root' || el.closest?.('#bernstein-widget-root')) {
+            return false;
+          }
+
+          // 2. Skip external stylesheets that cause SecurityError/CORS issues
+          // html-to-image fails if it tries to read cssRules from a cross-origin sheet
+          if (el.tagName === 'LINK' && el.getAttribute('rel') === 'stylesheet') {
+            const href = el.getAttribute('href');
+            if (href && (href.startsWith('http') || href.startsWith('//')) && !href.includes(window.location.host)) {
+              // If it's an external stylesheet without crossorigin="anonymous", skip it 
+              // to prevent "Failed to read the 'cssRules' property" errors.
+              return el.getAttribute('crossorigin') === 'anonymous';
+            }
+          }
+
+          return true;
+        }
       });
+      
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
       setFormState(prev => ({
@@ -86,7 +104,7 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
       }));
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[Feedback] Auto-screenshot failed:', err);
+      console.warn('[Feedback] Screenshot capture failed:', err);
     } finally {
       setIsHidingForCapture(false);
       setIsCapturing(false);
@@ -351,6 +369,10 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
                 </a>
               )}
             </Dialog.Title>
+
+            <Dialog.Description className="bf-sr-only">
+              Provide feedback, report a bug or request a feature about this page.
+            </Dialog.Description>
 
             {/* Plan limit reached — show message instead of form */}
             {isLimitReached && planStatus && planStatus.tickets_limit > 0 && (

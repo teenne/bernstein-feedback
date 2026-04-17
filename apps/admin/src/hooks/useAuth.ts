@@ -152,18 +152,11 @@ export function useAuth(): AuthState {
                     }
 
                     if (!data) {
-                        const { count } = await supabase!
-                            .from('user_roles')
-                            .select('*', { count: 'exact', head: true });
-
-                        if (cancelled) return;
-                        role = (count === 0) ? 'admin' : 'user';
-
-                        await supabase!.from('user_roles').upsert({
-                            user_id: userId,
-                            email,
-                            role,
-                        }, { onConflict: 'user_id' });
+                        // Row should have been created by the on_auth_user_created
+                        // trigger (handle_new_user). If we don't see it, the user
+                        // simply has no role row yet — default to 'user' and let
+                        // an admin promote them via the server endpoint.
+                        role = 'user';
                     } else {
                         role = (data.role as 'admin' | 'user') || 'user';
                     }

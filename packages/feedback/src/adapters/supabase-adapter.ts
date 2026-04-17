@@ -174,11 +174,13 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
     }> => {
         try {
             // Get project + plan limits (try plans table first, fall back to plan_limits JSONB)
+            // Use the public RPC so anon callers can read plan info without
+            // tripping RLS on the projects table (which only owners/members/admins
+            // can read directly). The function returns only plan columns — no
+            // sensitive owner data.
             const { data: project } = await supabase
-                .from('projects')
-                .select('plan, plan_id, plan_limits')
-                .eq('id', projectId)
-                .single();
+                .rpc('get_project_plan', { p_project_id: projectId })
+                .maybeSingle<{ plan: string; plan_id: string; plan_limits: Record<string, number> | null }>();
 
             if (!project) {
                 return { allowed: true };
@@ -250,10 +252,8 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
         async getPlanStatus(projectId: string) {
             try {
                 const { data: project } = await supabase
-                    .from('projects')
-                    .select('plan, plan_id, plan_limits')
-                    .eq('id', projectId)
-                    .single();
+                    .rpc('get_project_plan', { p_project_id: projectId })
+                    .maybeSingle<{ plan: string; plan_id: string; plan_limits: Record<string, number> | null }>();
 
                 if (!project) {
                     return { can_submit: true, tickets_used: 0, tickets_limit: 50, plan: 'free' };

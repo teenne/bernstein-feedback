@@ -71,7 +71,13 @@ export default function LoginPage() {
                 }
                 // On success, AuthGateway's onAuthStateChange listener handles redirect.
             } else {
-                const { data, error: err } = await supabase.auth.signUp({ email: email.toLowerCase(), password });
+                const { data, error: err } = await supabase.auth.signUp({
+                    email: email.toLowerCase(),
+                    password,
+                    options: {
+                        emailRedirectTo: `${window.location.origin}/feedback`,
+                    },
+                });
                 if (err) {
                     setError(err.message);
                 } else if (data.user && !data.session) {
@@ -98,7 +104,7 @@ export default function LoginPage() {
         setLoading(true);
         const { error: err } = await supabase.auth.signInWithOAuth({
             provider,
-            options: { redirectTo: window.location.origin },
+            options: { redirectTo: `${window.location.origin}/feedback` },
         });
         if (err) {
             setError(err.message);

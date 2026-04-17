@@ -107,19 +107,39 @@ export async function fetchFeedbackStats(project_id?: string) {
     return json.data;
 }
 
-export async function fetchProjects(ownerEmail?: string) {
-    if (useSupabaseDirectly) {
-        const { data, error } = await supabase!
-            .from('projects')
-            .select('*')
-            .order('created_at', { ascending: false });
-        if (error) throw new Error(error.message);
-        return data || [];
-    }
+// Module-level in-flight cache. App.tsx, FeedbackListPage, and StatsPage
+// all call fetchProjects() during their initial mount — without dedupe,
+// that's 3 identical requests fired within the same tick (6 in StrictMode).
+// Collapsing them into a single shared promise is safe because the result
+// is idempotent for a given ownerEmail.
+const fetchProjectsInFlight = new Map<string, Promise<any>>();
 
-    const params = ownerEmail ? `?owner_email=${encodeURIComponent(ownerEmail)}` : '';
-    const json = await apiFetch(`${API_URL}/api/projects${params}`);
-    return json.data;
+export async function fetchProjects(ownerEmail?: string) {
+    const cacheKey = ownerEmail || '__all__';
+    const existing = fetchProjectsInFlight.get(cacheKey);
+    if (existing) return existing;
+
+    const promise = (async () => {
+        try {
+            if (useSupabaseDirectly) {
+                const { data, error } = await supabase!
+                    .from('projects')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+                if (error) throw new Error(error.message);
+                return data || [];
+            }
+
+            const params = ownerEmail ? `?owner_email=${encodeURIComponent(ownerEmail)}` : '';
+            const json = await apiFetch(`${API_URL}/api/projects${params}`);
+            return json.data;
+        } finally {
+            fetchProjectsInFlight.delete(cacheKey);
+        }
+    })();
+
+    fetchProjectsInFlight.set(cacheKey, promise);
+    return promise;
 }
 
 export async function createProject(project: { id: string; name: string; owner_id: string; owner_email: string }) {
@@ -238,11 +258,30 @@ export interface LoopHealthData {
     };
 }
 
+const fetchLoopHealthInFlight = new Map<string, Promise<LoopHealthData>>();
+
 /**
  * (P4) Fetch feedback loop health metrics for a project (or global if projectId is null).
  * Supabase path calls the SQL function directly via rpc(); Node path hits the endpoint.
  */
 export async function fetchLoopHealth(projectId: string | null): Promise<LoopHealthData> {
+    const cacheKey = projectId || '__global__';
+    const existing = fetchLoopHealthInFlight.get(cacheKey);
+    if (existing) return existing;
+
+    const promise = (async (): Promise<LoopHealthData> => {
+        try {
+            return await fetchLoopHealthImpl(projectId);
+        } finally {
+            fetchLoopHealthInFlight.delete(cacheKey);
+        }
+    })();
+
+    fetchLoopHealthInFlight.set(cacheKey, promise);
+    return promise;
+}
+
+async function fetchLoopHealthImpl(projectId: string | null): Promise<LoopHealthData> {
     if (useSupabaseDirectly) {
         const { data, error } = await supabase!.rpc('feedback_loop_health', {
             p_project_id: projectId,
@@ -298,46 +337,57 @@ export async function fetchLoopHealth(projectId: string | null): Promise<LoopHea
     return json.data;
 }
 
+const fetchProjectUsageInFlight = new Map<string, Promise<any>>();
+
 export async function fetchProjectUsage(projectId: string) {
-    // Supabase-first: query tables directly when configured
-    if (useSupabaseDirectly) {
-        const month = new Date().toISOString().slice(0, 7);
-        const { data: project } = await supabase!
-            .from('projects')
-            .select('plan, plan_limits')
-            .eq('id', projectId)
-            .single();
+    const existing = fetchProjectUsageInFlight.get(projectId);
+    if (existing) return existing;
 
-        const { data: usage } = await supabase!
-            .from('project_usage')
-            .select('month, ticket_count')
-            .eq('project_id', projectId)
-            .order('month', { ascending: false })
-            .limit(6);
+    const promise = (async () => {
+        try {
+            if (useSupabaseDirectly) {
+                const month = new Date().toISOString().slice(0, 7);
+                const { data: project } = await supabase!
+                    .from('projects')
+                    .select('plan, plan_limits')
+                    .eq('id', projectId)
+                    .single();
 
-        const planLimits = (project?.plan_limits as Record<string, number> | null) || { max_tickets_per_month: 50 };
-        const currentUsage = (usage || []).find((u: any) => u.month === month);
-        const ticketsUsed = currentUsage?.ticket_count || 0;
-        const maxTickets = planLimits.max_tickets_per_month ?? 50;
+                const { data: usage } = await supabase!
+                    .from('project_usage')
+                    .select('month, ticket_count')
+                    .eq('project_id', projectId)
+                    .order('month', { ascending: false })
+                    .limit(6);
 
-        return {
-            plan: project?.plan || 'free',
-            tickets_used: ticketsUsed,
-            tickets_limit: maxTickets,
-            percentage_used: maxTickets > 0 ? Math.round((ticketsUsed / maxTickets) * 100) : 0,
-            month,
-            history: usage || [],
-        };
-    }
+                const planLimits = (project?.plan_limits as Record<string, number> | null) || { max_tickets_per_month: 50 };
+                const currentUsage = (usage || []).find((u: any) => u.month === month);
+                const ticketsUsed = currentUsage?.ticket_count || 0;
+                const maxTickets = planLimits.max_tickets_per_month ?? 50;
 
-    // Node server fallback
-    try {
-        const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/usage`);
-        return json.data;
-    } catch {
-        // Neither available — return defaults
-        return { plan: 'free', tickets_used: 0, tickets_limit: 50, percentage_used: 0, month: new Date().toISOString().slice(0, 7), history: [] };
-    }
+                return {
+                    plan: project?.plan || 'free',
+                    tickets_used: ticketsUsed,
+                    tickets_limit: maxTickets,
+                    percentage_used: maxTickets > 0 ? Math.round((ticketsUsed / maxTickets) * 100) : 0,
+                    month,
+                    history: usage || [],
+                };
+            }
+
+            try {
+                const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/usage`);
+                return json.data;
+            } catch {
+                return { plan: 'free', tickets_used: 0, tickets_limit: 50, percentage_used: 0, month: new Date().toISOString().slice(0, 7), history: [] };
+            }
+        } finally {
+            fetchProjectUsageInFlight.delete(projectId);
+        }
+    })();
+
+    fetchProjectUsageInFlight.set(projectId, promise);
+    return promise;
 }
 
 export async function fetchPlans() {
@@ -362,21 +412,33 @@ export async function fetchPlans() {
     return [];
 }
 
+let fetchUserProjectIdsInFlight: Promise<string[]> | null = null;
+
 export async function fetchUserProjectIds(): Promise<string[]> {
-    if (useSupabaseDirectly) {
-        const { data } = await supabase!
-            .from('projects')
-            .select('id');
-        return (data || []).map((p: any) => p.id);
-    }
+    if (fetchUserProjectIdsInFlight) return fetchUserProjectIdsInFlight;
 
-    const userId = await getCurrentUserId();
-    if (!userId) return [];
+    fetchUserProjectIdsInFlight = (async () => {
+        try {
+            if (useSupabaseDirectly) {
+                const { data } = await supabase!
+                    .from('projects')
+                    .select('id');
+                return (data || []).map((p: any) => p.id);
+            }
 
-    try {
-        const json = await apiFetch(`${API_URL}/api/projects?user_id=${encodeURIComponent(userId)}`);
-        return (json.data || []).map((p: any) => p.id);
-    } catch {
-        return [];
-    }
+            const userId = await getCurrentUserId();
+            if (!userId) return [];
+
+            try {
+                const json = await apiFetch(`${API_URL}/api/projects?user_id=${encodeURIComponent(userId)}`);
+                return (json.data || []).map((p: any) => p.id);
+            } catch {
+                return [];
+            }
+        } finally {
+            fetchUserProjectIdsInFlight = null;
+        }
+    })();
+
+    return fetchUserProjectIdsInFlight;
 }

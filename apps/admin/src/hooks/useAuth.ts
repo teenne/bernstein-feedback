@@ -8,6 +8,7 @@ interface AuthState {
     role: 'admin' | 'user' | null;
     email: string | null;
     userId: string | null;
+    accessToken: string | null;
     loading: boolean;
 }
 
@@ -31,6 +32,7 @@ const INITIAL_STATE: AuthState = {
     role: null,
     email: null,
     userId: null,
+    accessToken: null,
     loading: true,
 };
 
@@ -55,7 +57,7 @@ function setShared(next: AuthState) {
     subscribers.forEach(cb => cb(next));
 }
 
-async function resolveRoleFromDb(userId: string, email: string) {
+async function resolveRoleFromDb(userId: string, email: string, accessToken: string | null) {
     if (resolvedForUserId === userId || inFlightForUserId === userId) return;
     inFlightForUserId = userId;
     let role: 'admin' | 'user' = 'user';
@@ -85,6 +87,7 @@ async function resolveRoleFromDb(userId: string, email: string) {
             role,
             email,
             userId,
+            accessToken,
             loading: false,
         });
     } catch (err) {
@@ -130,6 +133,7 @@ async function readLocalSession() {
                 role: freshRole,
                 email,
                 userId: user_id,
+                accessToken: token,
                 loading: false,
             });
         } catch {
@@ -142,6 +146,7 @@ async function readLocalSession() {
                 role: cachedRole,
                 email,
                 userId: user_id,
+                accessToken: token,
                 loading: false,
             });
         }
@@ -169,8 +174,11 @@ function initOnce() {
         if (session?.user) {
             const userId = session.user.id;
             const email = session.user.email?.toLowerCase() || '';
+            const accessToken = session.access_token ?? null;
             if (resolvedForUserId !== userId) {
-                resolveRoleFromDb(userId, email);
+                resolveRoleFromDb(userId, email, accessToken);
+            } else if (sharedState.accessToken !== accessToken) {
+                setShared({ ...sharedState, accessToken });
             }
         } else {
             setShared({ ...INITIAL_STATE, loading: false });
@@ -181,12 +189,17 @@ function initOnce() {
         if (session?.user) {
             const userId = session.user.id;
             const email = session.user.email?.toLowerCase() || '';
+            const accessToken = session.access_token ?? null;
             // Skip re-fetching role when the same user's session is just
             // being refreshed (TOKEN_REFRESHED event). Otherwise every
             // token refresh — which happens every hour — would re-query
-            // user_roles for no reason.
+            // user_roles for no reason. We still propagate the new token
+            // into shared state so downstream consumers (e.g. the feedback
+            // adapter) rebuild with fresh auth.
             if (resolvedForUserId !== userId) {
-                resolveRoleFromDb(userId, email);
+                resolveRoleFromDb(userId, email, accessToken);
+            } else if (sharedState.accessToken !== accessToken) {
+                setShared({ ...sharedState, accessToken });
             }
         } else {
             resolvedForUserId = null;

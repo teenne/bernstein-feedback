@@ -192,10 +192,12 @@ export default function App() {
     // polling fallback and refetches on every WebSocket message instead.
     const wsEndpoint = apiUrl.replace(/^http/, "ws") + "/api/notifications/ws";
 
+    const accessToken = auth.accessToken ?? undefined;
+
     switch (rawConfig.adapterId) {
       case "supabase":
         if (supabaseUrl && supabaseKey) {
-          return supabaseAdapter({ supabaseUrl, supabaseKey });
+          return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
         return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
       case "console":
@@ -204,11 +206,11 @@ export default function App() {
       default:
         // Auto-use Supabase when keys are available, even if adapterId is 'local'
         if (supabaseUrl && supabaseKey) {
-          return supabaseAdapter({ supabaseUrl, supabaseKey });
+          return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
         return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
     }
-  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);
+  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey, auth.accessToken]);
 
   // Hooks must be called before any early return
   const location = useLocation();

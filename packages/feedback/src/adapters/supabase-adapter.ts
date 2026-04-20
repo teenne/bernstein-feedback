@@ -6,17 +6,23 @@ import type { FeedbackAdapter, FeedbackEvent } from '../schemas';
 // Creating a fresh client per call would register a new GoTrueClient under the
 // same storageKey and trigger the "Multiple GoTrueClient instances" warning.
 //
-// The cache key includes accessToken so that switching tokens (e.g. login /
-// logout / token refresh) creates a fresh client with the new auth header
-// instead of silently reusing the old session.
+// The cache key intentionally excludes accessToken — token rotation (login,
+// logout, hourly refresh) updates the existing client in place via the
+// `accessToken` getter supabase-js polls before each REST call, plus
+// `realtime.setAuth()` for the websocket. Keying on the token instead would
+// spawn a new GoTrueClient on every refresh and re-trigger the warning.
 const clientCache = new Map<string, SupabaseClient>();
+const tokenRegistry = new Map<string, string | undefined>();
 
 function getCachedClient(
     supabaseUrl: string,
     supabaseKey: string,
     accessToken?: string,
 ): SupabaseClient {
-    const cacheKey = `${supabaseUrl}::${supabaseKey}::${accessToken ?? ''}`;
+    const cacheKey = `${supabaseUrl}::${supabaseKey}`;
+    const prevToken = tokenRegistry.get(cacheKey);
+    tokenRegistry.set(cacheKey, accessToken);
+
     let client = clientCache.get(cacheKey);
     if (!client) {
         // Use a unique storageKey so this client doesn't collide with a host
@@ -28,22 +34,20 @@ function getCachedClient(
                 detectSessionInUrl: false,
                 storageKey: 'bernstein-feedback-adapter-auth',
             },
-            // When the host app provides a custom access token (e.g. a JWT
-            // minted by their backend signed with the Supabase JWT secret),
-            // attach it as the Authorization header for ALL REST calls.
-            // Realtime is bound to it via realtime.setAuth() below so the
-            // websocket join request carries the same identity → RLS can
-            // enforce per-user access without needing Supabase Auth.
-            global: accessToken
-                ? { headers: { Authorization: `Bearer ${accessToken}` } }
-                : undefined,
-        });
-        if (accessToken) {
-            try {
-                client.realtime.setAuth(accessToken);
-            } catch { /* older supabase-js versions: realtime auth is taken from headers */ }
-        }
+            // supabase-js calls this before each REST request, so updating
+            // tokenRegistry above is enough to propagate a rotated token.
+            accessToken: async () => tokenRegistry.get(cacheKey) ?? null,
+        } as any);
         clientCache.set(cacheKey, client);
+    }
+
+    // Realtime auth is *not* read via the accessToken getter — it's captured
+    // at channel-join time. Call setAuth so subsequent subscriptions (and
+    // already-joined channels via rejoin) carry the current identity.
+    if (accessToken !== prevToken) {
+        try {
+            client.realtime.setAuth(accessToken ?? null);
+        } catch { /* older supabase-js versions: ignore */ }
     }
     return client;
 }

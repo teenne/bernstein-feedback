@@ -199,7 +199,13 @@ export default function App() {
         if (supabaseUrl && supabaseKey) {
           return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
+        return httpAdapter({
+          endpoint: `${apiUrl}/api/feedback`,
+          wsEndpoint,
+          // Dynamic getter — re-read on every request and WS (re)connect so
+          // rotated tokens propagate without rebuilding the adapter.
+          getToken: () => auth.accessToken ?? undefined,
+        });
       case "console":
         return consoleAdapter();
       case "local":
@@ -208,7 +214,13 @@ export default function App() {
         if (supabaseUrl && supabaseKey) {
           return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
+        return httpAdapter({
+          endpoint: `${apiUrl}/api/feedback`,
+          wsEndpoint,
+          // Dynamic getter — re-read on every request and WS (re)connect so
+          // rotated tokens propagate without rebuilding the adapter.
+          getToken: () => auth.accessToken ?? undefined,
+        });
     }
   }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey, auth.accessToken]);
 

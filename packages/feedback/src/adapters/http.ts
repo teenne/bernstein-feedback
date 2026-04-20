@@ -16,10 +16,24 @@ export interface HttpAdapterOptions {
    * Example: 'ws://localhost:3000/api/notifications/ws'
    */
   wsEndpoint?: string;
+  /**
+   * Dynamic reader for the caller's bearer token. Invoked before every
+   * REST call and every WS (re)connect, so token rotation is picked up
+   * without rebuilding the adapter. Returning null/undefined means the
+   * call is unauthenticated — fine for the public feedback submit, but
+   * the notification endpoints will reject it with 401.
+   */
+  getToken?: () => string | null | undefined;
 }
 
 export type HttpAdapterReturn = FeedbackAdapter & {
   endpoint: string;
+  getNotifications?: (
+    projectId: string,
+    userId: string,
+  ) => Promise<{ data: any[]; unread_count: number }>;
+  markNotificationRead?: (id: string) => Promise<void>;
+  markAllNotificationsRead?: (projectId: string, userId: string) => Promise<void>;
   subscribeToNotifications?: (
     projectId: string,
     userId: string,
@@ -38,8 +52,9 @@ export type HttpAdapterReturn = FeedbackAdapter & {
 function openNotificationSocket(
   wsEndpoint: string,
   projectId: string,
-  userId: string,
+  _userId: string,
   onChange: () => void,
+  getToken?: () => string | null | undefined,
 ): () => void {
   // Browsers only. If there's no WebSocket global, bail out — the hook's
   // polling fallback will take over automatically.
@@ -47,9 +62,13 @@ function openNotificationSocket(
     return () => { /* no-op */ };
   }
 
-  const url =
-    wsEndpoint.replace(/\/+$/, '') +
-    `?project_id=${encodeURIComponent(projectId)}&user_id=${encodeURIComponent(userId)}`;
+  const buildUrl = () => {
+    const token = getToken?.();
+    const base = wsEndpoint.replace(/\/+$/, '');
+    const qs = `?project_id=${encodeURIComponent(projectId)}` +
+      (token ? `&token=${encodeURIComponent(token)}` : '');
+    return base + qs;
+  };
 
   let socket: WebSocket | null = null;
   let closed = false;
@@ -60,7 +79,9 @@ function openNotificationSocket(
   const connect = () => {
     if (closed) return;
     try {
-      socket = new WebSocket(url);
+      // Re-read the token on each (re)connect so a rotated JWT propagates
+      // without having to tear down and rebuild the adapter.
+      socket = new WebSocket(buildUrl());
     } catch {
       scheduleReconnect();
       return;
@@ -119,7 +140,16 @@ function openNotificationSocket(
  * when `wsEndpoint` is configured.
  */
 export function httpAdapter(options: HttpAdapterOptions): HttpAdapterReturn {
-  const { endpoint, headers = {}, timeout = 10000, transform, wsEndpoint } = options;
+  const { endpoint, headers = {}, timeout = 10000, transform, wsEndpoint, getToken } = options;
+
+  const authHeaders = (): Record<string, string> => {
+    const token = getToken?.();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  // Derive the notifications REST base from the feedback endpoint the
+  // caller already passed. `/api/feedback` → `/api/notifications`.
+  const notificationsBase = endpoint.replace(/\/api\/feedback\/?$/, '/api/notifications');
 
   const base: HttpAdapterReturn = {
     /** The endpoint URL (used by widget to derive plan-status/notification URLs) */
@@ -136,6 +166,7 @@ export function httpAdapter(options: HttpAdapterOptions): HttpAdapterReturn {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...authHeaders(),
             ...headers,
           },
           body: JSON.stringify(body),
@@ -180,12 +211,39 @@ export function httpAdapter(options: HttpAdapterOptions): HttpAdapterReturn {
     },
   };
 
+  // Attach REST notification methods so `useNotifications` routes through
+  // the adapter (which attaches the bearer token). Without these, the hook
+  // would fall back to its raw-fetch path that can't authenticate.
+  base.getNotifications = async (projectId, _userId) => {
+    const url = `${notificationsBase}?project_id=${encodeURIComponent(projectId)}`;
+    const res = await fetch(url, { headers: { ...authHeaders() } });
+    if (!res.ok) return { data: [], unread_count: 0 };
+    const json = await res.json().catch(() => null);
+    if (!json?.success) return { data: [], unread_count: 0 };
+    return { data: json.data ?? [], unread_count: json.unread_count ?? 0 };
+  };
+
+  base.markNotificationRead = async (id) => {
+    await fetch(`${notificationsBase}/${encodeURIComponent(id)}/read`, {
+      method: 'PATCH',
+      headers: { ...authHeaders() },
+    });
+  };
+
+  base.markAllNotificationsRead = async (projectId, _userId) => {
+    await fetch(`${notificationsBase}/mark-all-read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ project_id: projectId }),
+    });
+  };
+
   // Attach a realtime-push implementation only when a WebSocket URL was
   // provided. The presence of `subscribeToNotifications` on the adapter
   // object is what makes `useNotifications` choose realtime over polling.
   if (wsEndpoint) {
     base.subscribeToNotifications = (projectId, userId, onChange) =>
-      openNotificationSocket(wsEndpoint, projectId, userId, onChange);
+      openNotificationSocket(wsEndpoint, projectId, userId, onChange, getToken);
   }
 
   return base;

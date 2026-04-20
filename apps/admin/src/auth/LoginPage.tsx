@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
+import { AuthToast } from '../components/AuthToast';
 
 type Mode = 'login' | 'register';
 type OAuthProvider = 'google' | 'github';
@@ -65,8 +66,20 @@ export default function LoginPage() {
         setLoading(true);
         try {
             if (mode === 'login') {
+                // Write the flash BEFORE the network request. Supabase fires
+                // onAuthStateChange(SIGNED_IN) before signInWithPassword's
+                // promise resolves, and App.tsx drains sessionStorage on the
+                // isLoggedIn transition. If we set it after await, the drain
+                // has already run and the toast is lost.
+                sessionStorage.setItem(
+                    'auth_flash',
+                    JSON.stringify({ kind: 'success', message: 'Signed in successfully.' }),
+                );
                 const { error: err } = await supabase.auth.signInWithPassword({ email: email.toLowerCase(), password });
                 if (err) {
+                    // Login failed — remove the pre-staged flash so a later
+                    // successful login doesn't show a stale toast.
+                    sessionStorage.removeItem('auth_flash');
                     setError(err.message);
                 }
                 // On success, AuthGateway's onAuthStateChange listener handles redirect.
@@ -80,6 +93,13 @@ export default function LoginPage() {
                 });
                 if (err) {
                     setError(err.message);
+                } else if (data.user && (!data.user.identities || data.user.identities.length === 0)) {
+                    // Supabase's email-enumeration protection: when the email
+                    // is already registered, the API returns a fake user with
+                    // identities: []. We surface this as a clear error so the
+                    // user isn't left wondering why no confirmation email ever
+                    // arrives.
+                    setError('An account with this email already exists. Please sign in instead.');
                 } else if (data.user && !data.session) {
                     // Email confirmation required
                     setInfo('Account created. Check your email to confirm before signing in.');
@@ -124,6 +144,16 @@ export default function LoginPage() {
 
     return (
         <div className="min-h-screen w-full bg-gray-50 dark:bg-gray-950 flex flex-col items-center justify-center p-4 relative overflow-hidden transition-colors duration-500">
+            <AuthToast
+                message={error}
+                kind="error"
+                onDismiss={() => setError('')}
+            />
+            <AuthToast
+                message={info}
+                kind="success"
+                onDismiss={() => setInfo('')}
+            />
             {/* Orb Background (Dark Mode Only) - Primary */}
             <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-amber-500/10 rounded-full blur-[120px] pointer-events-none transition-opacity duration-700 ${isDark ? 'opacity-100' : 'opacity-0'}`} />
 
@@ -222,9 +252,6 @@ export default function LoginPage() {
                             </div>
                         </div>
                     )}
-
-                    {error && <p className="text-red-500 text-sm">{error}</p>}
-                    {info && <p className="text-amber-600 dark:text-amber-400 text-sm">{info}</p>}
 
                     <button
                         type="submit"

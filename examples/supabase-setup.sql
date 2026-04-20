@@ -750,6 +750,116 @@ CREATE TRIGGER on_feedback_resolved
   FOR EACH ROW EXECUTE FUNCTION public.handle_feedback_resolved();
 
 -- ============================================================
+-- Public RPC functions for the feedback widget (anon-safe)
+-- ============================================================
+-- The widget runs in host apps where end-users are NOT signed in to
+-- Supabase Auth, so it hits REST as `anon`. RLS on the `projects` and
+-- `project_usage` tables correctly restricts those tables to
+-- owners/members/admins — which means anon can't read them directly.
+--
+-- These SECURITY DEFINER functions expose ONLY the non-sensitive columns
+-- (plan info, usage count) and the atomic increment the widget needs,
+-- without giving anon any read access to owner identities or feedback
+-- content. Keep this block in sync with packages/feedback/src/adapters/
+-- supabase-adapter.ts — the TS side calls these RPCs by name.
+-- ============================================================
+
+-- get_project_plan: returns the project's plan pointer + JSONB fallback
+-- limits. The widget joins this with the `plans` table (which is public-
+-- readable) to compute the effective per-month ticket cap. If the project
+-- doesn't exist, returns zero rows — the widget treats that as "project
+-- not found" and refuses to submit.
+CREATE OR REPLACE FUNCTION public.get_project_plan(p_project_id TEXT)
+RETURNS TABLE (plan TEXT, plan_id TEXT, plan_limits JSONB)
+LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT plan, plan_id, plan_limits
+  FROM public.projects
+  WHERE id = p_project_id;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_project_plan(TEXT) TO anon, authenticated;
+
+-- increment_project_usage: atomic increment + cap enforcement.
+--
+-- * Pass p_max_tickets = -1 (or NULL) for unlimited plans.
+-- * Returns -1 (sentinel) when already at/over the cap — the widget
+--   treats this as "limit reached" and blocks the submission without
+--   incrementing, so the dashboard never shows "51 / 50".
+-- * Otherwise returns the new ticket_count.
+--
+-- Why not just rely on a client-side check? Because two concurrent
+-- submits can both read current_count=49 and both pass the check before
+-- either writes. The defensive clamp at the bottom rolls back to the
+-- cap in that narrow race. The plan-limit email trigger on project_usage
+-- fires off of the UPDATE so owners still get notified.
+CREATE OR REPLACE FUNCTION public.increment_project_usage(
+  p_project_id TEXT,
+  p_month TEXT,
+  p_max_tickets INT DEFAULT NULL
+)
+RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  new_count INT;
+  current_count INT;
+BEGIN
+  SELECT COALESCE(ticket_count, 0) INTO current_count
+  FROM public.project_usage
+  WHERE project_id = p_project_id AND month = p_month;
+
+  IF p_max_tickets IS NOT NULL
+     AND p_max_tickets > 0
+     AND current_count >= p_max_tickets
+  THEN
+    RETURN -1;
+  END IF;
+
+  INSERT INTO public.project_usage (project_id, month, ticket_count)
+  VALUES (p_project_id, p_month, 1)
+  ON CONFLICT (project_id, month)
+  DO UPDATE SET
+    ticket_count = public.project_usage.ticket_count + 1,
+    updated_at   = NOW()
+  RETURNING ticket_count INTO new_count;
+
+  IF p_max_tickets IS NOT NULL
+     AND p_max_tickets > 0
+     AND new_count > p_max_tickets
+  THEN
+    UPDATE public.project_usage
+    SET ticket_count = p_max_tickets, updated_at = NOW()
+    WHERE project_id = p_project_id AND month = p_month;
+    new_count := p_max_tickets;
+  END IF;
+
+  RETURN new_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.increment_project_usage(TEXT, TEXT, INT)
+  TO anon, authenticated;
+
+-- get_project_usage: read-only counterpart for the widget's plan-status
+-- banner. Returns 0 when no row exists yet this month (no usage recorded
+-- == 0 tickets used), so the caller doesn't need a null check.
+CREATE OR REPLACE FUNCTION public.get_project_usage(
+  p_project_id TEXT,
+  p_month TEXT
+)
+RETURNS INT
+LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(
+    (SELECT ticket_count
+       FROM public.project_usage
+      WHERE project_id = p_project_id AND month = p_month),
+    0
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_project_usage(TEXT, TEXT)
+  TO anon, authenticated;
+
+-- ============================================================
 -- Row Level Security (RLS)
 -- ============================================================
 -- ALTER TABLE ... ENABLE ROW LEVEL SECURITY is idempotent.

@@ -204,42 +204,38 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
                 maxTickets = planLimits.max_tickets_per_month ?? 50;
             }
 
-            // Check current month usage
+            // Atomically increment this month's usage via the RPC. Passing
+            // p_max_tickets makes the RPC cap the counter at the limit — the
+            // INSERT/UPDATE is skipped once current_count >= max, so we can
+            // never show "51 / 50" in the dashboard. Unlimited plans (max = -1)
+            // pass through unchanged. The RPC also serialises concurrent
+            // submits so we never hit 23505 on (project_id, month).
             const month = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-            const { data: usage } = await supabase
-                .from('project_usage')
-                .select('ticket_count')
-                .eq('project_id', projectId)
-                .eq('month', month)
-                .maybeSingle();
+            const { data: newCount, error: rpcErr } = await supabase
+                .rpc('increment_project_usage', {
+                    p_project_id: projectId,
+                    p_month: month,
+                    p_max_tickets: maxTickets,
+                });
 
-            const currentCount = usage?.ticket_count ?? 0;
+            if (rpcErr || newCount == null) {
+                console.warn('[Bernstein] Usage increment failed:', rpcErr?.message);
+                return { allowed: true };
+            }
 
-            if (currentCount >= maxTickets) {
+            // The RPC returns -1 as a sentinel for "blocked — already at cap".
+            // Any non-negative return means the increment happened and is
+            // within the limit.
+            if ((newCount as number) === -1) {
                 return {
                     allowed: false,
                     message: 'Monthly feedback limit reached. Upgrade your plan to continue collecting feedback.',
-                    tickets_used: currentCount,
+                    tickets_used: maxTickets,
                     tickets_limit: maxTickets,
                 };
             }
 
-            // Increment usage count (upsert)
-            if (usage) {
-                const { error: updateErr } = await supabase
-                    .from('project_usage')
-                    .update({ ticket_count: currentCount + 1, updated_at: new Date().toISOString() })
-                    .eq('project_id', projectId)
-                    .eq('month', month);
-                if (updateErr) console.warn('[Bernstein] Usage update failed:', updateErr.message);
-            } else {
-                const { error: insertErr } = await supabase
-                    .from('project_usage')
-                    .insert({ project_id: projectId, month, ticket_count: 1 });
-                if (insertErr) console.warn('[Bernstein] Usage insert failed:', insertErr.message);
-            }
-
-            return { allowed: true, tickets_used: currentCount + 1, tickets_limit: maxTickets };
+            return { allowed: true, tickets_used: newCount as number, tickets_limit: maxTickets };
         } catch (err) {
             // Fail-safe: if usage check fails, allow the submission
             console.warn('[Bernstein] Usage check error:', err instanceof Error ? err.message : err);
@@ -279,14 +275,17 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
 
                 const month = new Date().toISOString().slice(0, 7);
 
-                const { data: usage } = await supabase
-                    .from('project_usage')
-                    .select('ticket_count')
-                    .eq('project_id', projectId)
-                    .eq('month', month)
-                    .maybeSingle();
+                // Read current month's usage via the public RPC. A direct
+                // SELECT on project_usage is blocked by RLS for anon callers
+                // (admin/owner/member only), which would silently return 0
+                // tickets used even when the project is at its monthly limit.
+                const { data: usageCount } = await supabase
+                    .rpc('get_project_usage', {
+                        p_project_id: projectId,
+                        p_month: month,
+                    });
 
-                const ticketsUsed = usage?.ticket_count ?? 0;
+                const ticketsUsed = (usageCount as number) ?? 0;
                 const canSubmit = ticketsUsed < maxTickets;
 
                 return {
@@ -304,11 +303,10 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
 
         async submit(event: FeedbackEvent) {
             try {
-                // Check project exists
+                // Check project exists via the public RPC — a direct SELECT on
+                // projects is blocked by RLS for anon callers.
                 const { data: projectExists } = await supabase
-                    .from('projects')
-                    .select('id')
-                    .eq('id', event.project_id)
+                    .rpc('get_project_plan', { p_project_id: event.project_id })
                     .maybeSingle();
 
                 if (!projectExists) {

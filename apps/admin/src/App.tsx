@@ -27,16 +27,13 @@ import { supabase } from "./lib/supabaseClient";
 import { SESSION_KEYS } from "./lib/config";
 import { initPostHog, identifyPostHog, resetPostHog } from "./lib/posthog";
 import { Header } from "./components/Header";
+import { AuthToast, type AuthToastKind } from "./components/AuthToast";
 
 // Kick off PostHog at module load so it's ready before any component
 // mounts. Returns null when VITE_POSTHOG_KEY isn't set — App then
 // drops the sessionProvider so FeedbackProvider works without it.
-const posthogInstance = initPostHog();
-import {
-  fetchUserProjectIds,
-  fetchProjects,
-  createProject,
-} from "./lib/feedbackApi";
+// const posthogInstance = initPostHog();
+import { fetchUserProjectIds, fetchProjects } from "./lib/feedbackApi";
 
 // Lazy loaded pages
 const FeedbackListPage = lazy(() =>
@@ -87,6 +84,26 @@ export default function App() {
   const [showPlanSelection, setShowPlanSelection] = useState(false);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const auth = useAuth();
+
+  // Flash toast drained from sessionStorage after auth redirect. LoginPage
+  // writes a { kind, message } blob before the onAuthStateChange redirect
+  // unmounts it; we show it here once the user is on the authed page.
+  const [flash, setFlash] = useState<{
+    kind: AuthToastKind;
+    message: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!auth.isLoggedIn) return;
+    const raw = sessionStorage.getItem("auth_flash");
+    if (!raw) return;
+    sessionStorage.removeItem("auth_flash");
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed?.message) setFlash(parsed);
+    } catch {
+      /* malformed — ignore */
+    }
+  }, [auth.isLoggedIn]);
   const {
     config,
     rawConfig,
@@ -125,10 +142,15 @@ export default function App() {
           if (!activeProjectId) setActiveProjectId(ids[0]);
           setShowPlanSelection(false);
         } else if (auth.isAdmin) {
-          // Admin with no projects (first registration) — show plan selection
+          // Admin/owner with no projects (first registration) — land on
+          // plan selection so they can pick a tier before creating their
+          // first project. Regular users never hit this flow; they are
+          // invited to existing projects by an admin.
           setShowPlanSelection(true);
         } else {
-          // Regular user with no projects — wait to be assigned
+          // Regular user with no projects — wait to be assigned to a
+          // project by an admin. Avoid dumping them on the plan page
+          // because they can't actually create projects themselves.
           setShowPlanSelection(false);
         }
       } catch {}
@@ -247,6 +269,11 @@ export default function App() {
 
   return (
     <FeedbackErrorBoundary>
+      <AuthToast
+        message={flash?.message || ""}
+        kind={flash?.kind || "success"}
+        onDismiss={() => setFlash(null)}
+      />
       <FeedbackProvider
         config={{
           ...config,

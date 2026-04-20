@@ -1,10 +1,15 @@
 import type { Server as HttpServer, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { subscribe, subscriberCount } from './notificationBus';
+import { verifyToken } from '../middleware/auth';
 
 // WebSocket server attached to the existing Express HTTP server.
 //
-// Endpoint: ws://<host>/api/notifications/ws?project_id=X&user_id=Y
+// Endpoint: ws://<host>/api/notifications/ws?project_id=X&token=<jwt>
+//
+// The caller must pass a valid JWT in the `token` query param; the user
+// identity comes from the token (never from client input) so one user
+// can't subscribe to another's stream.
 //
 // Client-facing message shape:
 //   {"type":"new_notification","data":{...}}   — a row was inserted
@@ -35,12 +40,24 @@ export function attachNotificationWs(server: HttpServer): WebSocketServer {
         }
 
         const projectId = url.searchParams.get('project_id') || '';
-        const userId = url.searchParams.get('user_id') || '';
-        if (!projectId || !userId) {
+        if (!projectId) {
             socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
             socket.destroy();
             return;
         }
+
+        // Browsers can't set headers on `new WebSocket()`, so the token
+        // travels in a query param. Validate it before accepting the
+        // upgrade — anything else would let anyone subscribe to any
+        // user's stream by guessing their UUID.
+        const token = url.searchParams.get('token') || '';
+        const payload = verifyToken(token);
+        if (!payload) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+        const userId = payload.user_id;
 
         wss.handleUpgrade(req, socket, head, (ws) => {
             wss.emit('connection', ws, req, { projectId, userId });

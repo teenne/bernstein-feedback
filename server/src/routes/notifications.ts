@@ -1,15 +1,17 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db';
+import { requireAuth, JwtPayload } from '../middleware/auth';
 import { GetNotificationsSchema, MarkAllReadSchema } from '../schemas/notification';
 import { Notification } from '../schemas/tables';
 
 const router = Router();
 
-// Get notifications for a user in a project
-router.get('/', async (req, res) => {
+// Get notifications for the authenticated user in a project
+router.get('/', requireAuth, async (req, res) => {
     try {
-        const { project_id, user_id } = GetNotificationsSchema.parse(req.query);
+        const { project_id } = GetNotificationsSchema.parse(req.query);
+        const user = (req as any).user as JwtPayload;
 
         const result = await query<Pick<Notification, 'id' | 'project_id' | 'feedback_id' | 'type' | 'title' | 'message' | 'read' | 'created_at'>>(
             `SELECT id, project_id, feedback_id, type, title, message, read, created_at
@@ -17,7 +19,7 @@ router.get('/', async (req, res) => {
              WHERE project_id = $1 AND user_id = $2 AND created_at > NOW() - INTERVAL '30 days'
              ORDER BY created_at DESC
              LIMIT 20`,
-            [project_id, user_id]
+            [project_id, user.user_id]
         );
 
         const unreadCount = result.rows.filter((r) => !r.read).length;
@@ -33,14 +35,17 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Mark a single notification as read
-router.patch('/:id/read', async (req, res) => {
+// Mark a single notification as read (only if it belongs to the caller)
+router.patch('/:id/read', requireAuth, async (req, res) => {
     try {
+        const user = (req as any).user as JwtPayload;
         const result = await query<Pick<Notification, 'id'>>(
-            'UPDATE notifications SET read = TRUE WHERE id = $1 RETURNING id',
-            [req.params.id]
+            'UPDATE notifications SET read = TRUE WHERE id = $1 AND user_id = $2 RETURNING id',
+            [req.params.id, user.user_id]
         );
         if (result.rows.length === 0) {
+            // Either the row doesn't exist or it belongs to another user —
+            // collapse both to 404 so we don't leak existence.
             res.status(404).json({ success: false, error: 'Notification not found' });
             return;
         }
@@ -51,14 +56,15 @@ router.patch('/:id/read', async (req, res) => {
     }
 });
 
-// Mark all notifications as read for a user+project
-router.post('/mark-all-read', async (req, res) => {
+// Mark all notifications as read for the authenticated user in a project
+router.post('/mark-all-read', requireAuth, async (req, res) => {
     try {
-        const { project_id, user_id } = MarkAllReadSchema.parse(req.body);
+        const { project_id } = MarkAllReadSchema.parse(req.body);
+        const user = (req as any).user as JwtPayload;
 
         await query(
             'UPDATE notifications SET read = TRUE WHERE project_id = $1 AND user_id = $2 AND read = FALSE',
-            [project_id, user_id]
+            [project_id, user.user_id]
         );
         res.json({ success: true });
     } catch (error) {

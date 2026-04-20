@@ -192,23 +192,37 @@ export default function App() {
     // polling fallback and refetches on every WebSocket message instead.
     const wsEndpoint = apiUrl.replace(/^http/, "ws") + "/api/notifications/ws";
 
+    const accessToken = auth.accessToken ?? undefined;
+
     switch (rawConfig.adapterId) {
       case "supabase":
         if (supabaseUrl && supabaseKey) {
-          return supabaseAdapter({ supabaseUrl, supabaseKey });
+          return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
+        return httpAdapter({
+          endpoint: `${apiUrl}/api/feedback`,
+          wsEndpoint,
+          // Dynamic getter — re-read on every request and WS (re)connect so
+          // rotated tokens propagate without rebuilding the adapter.
+          getToken: () => auth.accessToken ?? undefined,
+        });
       case "console":
         return consoleAdapter();
       case "local":
       default:
         // Auto-use Supabase when keys are available, even if adapterId is 'local'
         if (supabaseUrl && supabaseKey) {
-          return supabaseAdapter({ supabaseUrl, supabaseKey });
+          return supabaseAdapter({ supabaseUrl, supabaseKey, accessToken });
         }
-        return httpAdapter({ endpoint: `${apiUrl}/api/feedback`, wsEndpoint });
+        return httpAdapter({
+          endpoint: `${apiUrl}/api/feedback`,
+          wsEndpoint,
+          // Dynamic getter — re-read on every request and WS (re)connect so
+          // rotated tokens propagate without rebuilding the adapter.
+          getToken: () => auth.accessToken ?? undefined,
+        });
     }
-  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey]);
+  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey, auth.accessToken]);
 
   // Hooks must be called before any early return
   const location = useLocation();

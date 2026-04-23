@@ -21,7 +21,7 @@ function resolveConnection(): string | undefined {
     
     if (DB_MODE === "memory") return undefined;
 
-    const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+    const url = process.env.DATABASE_SUP_URL || process.env.DATABASE_URL;
     const isPlaceholder = (s: string) => /<[^>]*>/.test(s);
 
     if (DB_MODE === "cloud" && url && url.trim() && !isPlaceholder(url)) {

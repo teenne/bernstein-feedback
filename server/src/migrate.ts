@@ -8,7 +8,7 @@ dotenv.config();
 async function migrate() {
     const DB_MODE = process.env.DB_MODE?.toLowerCase() || 
         (process.env.DATABASE_URL || process.env.DATABASE_SUP_URL ? "cloud" : "local");
-    const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+    const url = process.env.DATABASE_SUP_URL || process.env.DATABASE_URL;
     const useConnectionString = DB_MODE === "cloud" && url && !/<[^>]*>/.test(url);
 
     const pool = useConnectionString

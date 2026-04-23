@@ -20,7 +20,7 @@ function isPlaceholderUrl(url: string): boolean {
 }
 
 function getValidConnectionString(): string | null {
-  const url = process.env.DATABASE_URL || process.env.DATABASE_SUP_URL;
+  const url = process.env.DATABASE_SUP_URL || process.env.DATABASE_URL;
   if (!url || url.trim() === "" || isPlaceholderUrl(url)) return null;
   return url;
 }
@@ -46,7 +46,7 @@ const pool = useConnectionString
 
 console.info(
   useConnectionString
-    ? `📡 Database mode: CLOUD (via ${process.env.DATABASE_URL ? "DATABASE_URL" : "DATABASE_SUP_URL"})`
+    ? `📡 Database mode: CLOUD (via ${process.env.DATABASE_SUP_URL ? "DATABASE_SUP_URL" : "DATABASE_URL"})`
     : `📡 Database mode: LOCAL (${process.env.DB_HOST || "127.0.0.1"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "postgres"})`,
 );
 

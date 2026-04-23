@@ -282,6 +282,84 @@ export async function updateFeedbackTriage(
 }
 
 /**
+ * Proposed fix attached to a cluster by an agent via the Agent API.
+ * Populated by POST /api/v1/agent/:projectId/clusters/:id/propose-fix.
+ */
+export interface ProposedFix {
+    summary: string;
+    diff: string;
+    files?: string[];
+    confidence?: number | null;
+    proposed_by?: string;
+    proposed_at?: string;
+}
+
+export interface ClusterDetail {
+    id: string;
+    project_id: string;
+    feedback_type: string;
+    title: string;
+    submission_count: number;
+    first_seen_at: string;
+    last_seen_at: string;
+    resolved_at: string | null;
+    priority_score: string | number;
+    is_auto_resolvable: boolean;
+    proposed_fix: ProposedFix | null;
+    canonical_feedback_id: string | null;
+}
+
+export async function fetchClusterDetail(clusterId: string): Promise<ClusterDetail | null> {
+    if (useSupabaseDirectly) {
+        const { data, error } = await supabase!
+            .from('clusters')
+            .select('id, project_id, feedback_type, title, submission_count, first_seen_at, last_seen_at, resolved_at, priority_score, is_auto_resolvable, proposed_fix, canonical_feedback_id')
+            .eq('id', clusterId)
+            .single();
+        if (error) return null;
+        return data as ClusterDetail;
+    }
+    try {
+        const json = await apiFetch(`${API_URL}/api/feedback/clusters/${encodeURIComponent(clusterId)}`);
+        return json.data as ClusterDetail;
+    } catch {
+        return null;
+    }
+}
+
+export async function approveClusterFix(clusterId: string): Promise<{ closed_count: number }> {
+    if (useSupabaseDirectly) {
+        // Supabase mode: resolve every member row; fan-out guard in the
+        // trigger dedups the notifications.
+        const { data: cluster } = await supabase!
+            .from('clusters')
+            .select('proposed_fix')
+            .eq('id', clusterId)
+            .single();
+        const fix = (cluster as any)?.proposed_fix;
+        if (!fix) throw new Error('No proposed_fix on this cluster. Ask the agent to submit one first.');
+        const note = fix.summary ? `Auto-fix: ${fix.summary}` : 'Auto-fix approved';
+        const { data, error } = await supabase!
+            .from('feedback')
+            .update({
+                status: 'resolved',
+                resolved_at: new Date().toISOString(),
+                resolution_note: note,
+            })
+            .eq('cluster_id', clusterId)
+            .not('status', 'in', '("resolved","closed")')
+            .select('id');
+        if (error) throw new Error(error.message);
+        return { closed_count: data?.length ?? 0 };
+    }
+    const json = await apiFetch(`${API_URL}/api/feedback/clusters/${encodeURIComponent(clusterId)}/approve-fix`, {
+        method: 'POST',
+    });
+    if (!json.success) throw new Error(json.error || 'Approve failed');
+    return { closed_count: json.closed_count ?? 0 };
+}
+
+/**
  * (Tier 2) Fetch the other feedback rows in the same cluster as a given
  * feedback id — for the "Also reported by" panel on the detail page.
  * Returns `[]` if the feedback has no cluster or no siblings.

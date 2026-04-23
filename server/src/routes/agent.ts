@@ -37,6 +37,14 @@ const AgentNoteSchema = z.object({
     author: z.string().min(1).max(100).optional(),
 });
 
+const ProposedFixSchema = z.object({
+    summary: z.string().min(1).max(500),
+    diff: z.string().min(1).max(50000),
+    files: z.array(z.string()).max(50).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    proposed_by: z.string().min(1).max(100).optional(),
+});
+
 // Every agent route goes through both middlewares. `requireProjectApiKey`
 // reads req.params.projectId; `requirePlanFeature` accepts the same.
 router.use('/:projectId', requireProjectApiKey, requirePlanFeature('api_access'));
@@ -354,6 +362,59 @@ router.post('/:projectId/feedback/:feedbackId/note', async (req, res) => {
             success: true,
             data: result.rows[0],
         });
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+            return;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+/**
+ * POST /api/v1/agent/:projectId/clusters/:clusterId/propose-fix
+ *
+ * Agents attach a diff proposal to an auto-resolvable cluster. The admin
+ * UI renders the diff in a "Proposed Fix" panel with an Approve button
+ * (POST /api/projects/:projectId/clusters/:clusterId/approve-fix) that
+ * closes the cluster and records the approval.
+ *
+ * Body: { summary, diff, files?, confidence?, proposed_by? }
+ *
+ * Does NOT require `is_auto_resolvable=true` on the cluster — agents can
+ * propose fixes on any bug cluster; the flag is just a hint the
+ * classifier surfaces to the admin UI.
+ */
+router.post('/:projectId/clusters/:clusterId/propose-fix', async (req, res) => {
+    try {
+        const { project_id } = (req as any).agent as AgentAuthContext;
+        const { clusterId } = req.params;
+        const body = ProposedFixSchema.parse(req.body ?? {});
+
+        const proposal = {
+            summary: body.summary,
+            diff: body.diff,
+            files: body.files ?? [],
+            confidence: body.confidence ?? null,
+            proposed_by: body.proposed_by ?? 'agent',
+            proposed_at: new Date().toISOString(),
+        };
+
+        const result = await query<{ id: string; proposed_fix: unknown }>(
+            `UPDATE clusters
+                SET proposed_fix = $3::jsonb
+              WHERE id = $1 AND project_id = $2
+              RETURNING id, proposed_fix`,
+            [clusterId, project_id, JSON.stringify(proposal)],
+        );
+
+        if (result.rowCount === 0) {
+            res.status(404).json({ success: false, error: 'Cluster not found' });
+            return;
+        }
+
+        res.json({ success: true, data: result.rows[0] });
     } catch (error) {
         if (error instanceof z.ZodError) {
             res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });

@@ -19,6 +19,8 @@ import type {
   Notification,
 } from "./schemas";
 import { useNotifications } from "./hooks/useNotifications";
+import { useRageClickDetector } from "./hooks/useRageClickDetector";
+import { ProactivePrompt } from "./components/ProactivePrompt";
 import { redactSecrets, redactUrl, getElementDescriptor } from "./utils/redact";
 
 interface HighlightedElement {
@@ -124,6 +126,27 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     markAllRead: markAllNotificationsRead,
   } = useNotifications(config);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  // Proactive prompts (Tier 1) — rage-click detection. Shown at most
+  // once per session so it can't spam a frustrated user.
+  const triggers = config.proactiveTriggers;
+  const rageClickEnabled =
+    triggers !== false && triggers?.rageClick === true;
+  const [rageClickPrompt, setRageClickPrompt] = useState<{
+    target: string;
+    count: number;
+  } | null>(null);
+  const rageClickFiredRef = useRef(false);
+  useRageClickDetector({
+    enabled: rageClickEnabled && !rageClickFiredRef.current,
+    threshold: triggers ? triggers.rageClickThreshold : undefined,
+    windowMs: triggers ? triggers.rageClickWindowMs : undefined,
+    onDetect: (info) => {
+      if (rageClickFiredRef.current) return;
+      rageClickFiredRef.current = true;
+      setRageClickPrompt(info);
+    },
+  });
 
   // Dynamic screen identity state
   const [screenIdentity, setScreenIdentity] = useState<{
@@ -692,6 +715,20 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   return (
     <FeedbackContext.Provider value={value}>
       {children}
+      <ProactivePrompt
+        show={rageClickPrompt !== null}
+        title="Something not working?"
+        message={`We noticed a few clicks on "${rageClickPrompt?.target}". If it's broken, tell us and we'll take a look.`}
+        onReport={() => {
+          const target = rageClickPrompt?.target ?? "this element";
+          setRageClickPrompt(null);
+          openBugReport({
+            title: `Clicks on ${target} don't seem to work`,
+            description: `I tried clicking ${target} multiple times with no response.`,
+          });
+        }}
+        onDismiss={() => setRageClickPrompt(null)}
+      />
     </FeedbackContext.Provider>
   );
 }

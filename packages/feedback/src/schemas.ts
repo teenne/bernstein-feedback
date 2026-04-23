@@ -336,4 +336,24 @@ export interface FeedbackConfig {
 
   /** Show Branding (Powered by Bernstein) */
   showBranding?: boolean;
+
+  /**
+   * Proactive prompts — small non-intrusive card that appears when the
+   * user shows signs of frustration, offering to capture a bug report
+   * without them needing to find the bubble. Currently supports:
+   *   - `rage_click`: 4+ rapid clicks on the same element within 1.5s
+   *
+   * When the user accepts, the feedback dialog opens in bug-report mode
+   * with a pre-filled description. Frequency-capped at one prompt per
+   * session (per trigger type) so it can't spam.
+   *
+   * Set to `false` or omit to disable.
+   */
+  proactiveTriggers?: {
+    rageClick?: boolean;
+    /** Click threshold per burst (default: 4). */
+    rageClickThreshold?: number;
+    /** Time window in ms within which clicks count as a burst (default: 1500). */
+    rageClickWindowMs?: number;
+  } | false;
 }

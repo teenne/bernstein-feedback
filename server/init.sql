@@ -161,6 +161,12 @@ CREATE TABLE clusters (
   last_seen_at         TIMESTAMPTZ DEFAULT NOW(),
   resolved_at          TIMESTAMPTZ,
   priority_score       NUMERIC DEFAULT 0,
+  -- Auto-resolvable flagging (Phase 3/4): narrow, self-contained tickets
+  -- (typos, colour fixes, null checks) that agents can propose a one-click
+  -- diff for. Flag is set by the classifier (classify_cluster_auto_resolvable);
+  -- proposed_fix is attached by the agent via POST /agent/.../propose-fix.
+  is_auto_resolvable   BOOLEAN NOT NULL DEFAULT FALSE,
+  proposed_fix         JSONB,   -- {summary, diff, files, confidence, proposed_by, proposed_at}
   created_at           TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -743,6 +749,64 @@ RETURNS NUMERIC AS $$
   FROM clusters c
   WHERE c.id = p_cluster_id;
 $$ LANGUAGE sql STABLE;
+
+-- ============================================================
+-- Auto-resolvable classifier.
+-- Returns TRUE if the cluster looks like a narrow, self-contained fix
+-- (per the doc: "an incorrect colour, a missing null check, or a label
+-- typo"). Heuristic only — keyword match on the canonical feedback's
+-- title + description, short text length, low submission count, and
+-- bug_report type. No AI call. Safe to call on every cluster.
+--
+-- The classifier runs automatically after cluster creation / update via
+-- the trigger below, so the admin dashboard always has a fresh flag.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.classify_cluster_auto_resolvable(p_cluster_id UUID)
+RETURNS BOOLEAN AS $$
+DECLARE
+  v_type TEXT;
+  v_text TEXT;
+  v_keyword_hit BOOLEAN;
+BEGIN
+  SELECT c.feedback_type,
+         LOWER(COALESCE(f.title, '') || ' ' || COALESCE(f.description, ''))
+    INTO v_type, v_text
+    FROM public.clusters c
+    LEFT JOIN public.feedback f ON f.id = c.canonical_feedback_id
+   WHERE c.id = p_cluster_id;
+
+  IF v_type IS NULL OR v_type <> 'bug_report' THEN
+    RETURN FALSE;
+  END IF;
+  IF LENGTH(v_text) > 600 THEN
+    RETURN FALSE;   -- long descriptions = probably not a one-liner fix
+  END IF;
+
+  -- Narrow-fix keyword match. Deliberately conservative — false positives
+  -- here mean the developer sees a fix panel that isn't actionable, which
+  -- is worse UX than hiding it.
+  v_keyword_hit := v_text ~* '\m(typo|misspell|spelling|wrong text|wrong label|label says|placeholder text|button text|color|colour|css|margin|padding|alignment|align|null\s*check|undefined|nullref|null\s*reference|nil\s*pointer|404 on|broken link|dead link)\M';
+
+  RETURN v_keyword_hit;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- Trigger to keep is_auto_resolvable fresh whenever a cluster's canonical
+-- feedback changes (first submission AND when submission_count recount
+-- reassigns the canonical row via the worker).
+CREATE OR REPLACE FUNCTION public.refresh_cluster_classification()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.is_auto_resolvable := public.classify_cluster_auto_resolvable(NEW.id);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS on_cluster_upsert_classify ON public.clusters;
+CREATE TRIGGER on_cluster_upsert_classify
+  BEFORE INSERT OR UPDATE OF canonical_feedback_id, submission_count
+  ON public.clusters
+  FOR EACH ROW EXECUTE FUNCTION public.refresh_cluster_classification();
 
 -- ============================================================
 -- P4: Feedback loop health — three metrics computed per project.

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage, fetchClusterSiblings } from '../lib/feedbackApi';
+import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage, fetchClusterSiblings, fetchClusterDetail, approveClusterFix, type ClusterDetail } from '../lib/feedbackApi';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -34,6 +34,25 @@ export function FeedbackDetailPage() {
         id: string; title: string; email: string | null; user_id: string | null;
         created_at: string; status: string | null;
     }>>([]);
+    // Auto-resolvable fix — populated only when this feedback belongs to
+    // a cluster that either has `is_auto_resolvable=true` or already has
+    // an agent-proposed diff attached.
+    const [cluster, setCluster] = useState<ClusterDetail | null>(null);
+    const [approvingFix, setApprovingFix] = useState(false);
+
+    const handleApproveFix = async () => {
+        if (!cluster || approvingFix) return;
+        if (!confirm('Approve this fix and resolve every reporter in the cluster?')) return;
+        setApprovingFix(true);
+        try {
+            await approveClusterFix(cluster.id);
+            setItem(prev => prev ? { ...prev, status: 'resolved', resolved_at: new Date().toISOString() } : null);
+            setCluster(prev => prev ? { ...prev, resolved_at: new Date().toISOString() } : null);
+        } catch (err: any) {
+            setError(err.message || 'Failed to approve fix');
+        }
+        setApprovingFix(false);
+    };
 
     const handlePriorityChange = async (newPriority: FeedbackPriority | null) => {
         if (!item || triageUpdating) return;
@@ -107,6 +126,11 @@ export function FeedbackDetailPage() {
                 fetchClusterSiblings(id!)
                     .then(setClusterSiblings)
                     .catch(() => setClusterSiblings([]));
+                if (data.cluster_id) {
+                    fetchClusterDetail(data.cluster_id)
+                        .then(setCluster)
+                        .catch(() => setCluster(null));
+                }
             } catch (err: any) {
                 setError(err.message || 'Failed to load feedback');
             }
@@ -278,6 +302,61 @@ export function FeedbackDetailPage() {
                             </div>
                         )}
                     </div>
+                </GlassCard>
+            )}
+
+            {/* Proposed Fix (Auto-resolvable) — rendered when an agent has
+                attached a diff to this feedback's cluster via the Agent API.
+                Developer reviews the diff, clicks Approve, cluster resolves
+                and every reporter gets the loop-close notification once. */}
+            {cluster && (cluster.is_auto_resolvable || cluster.proposed_fix) && (
+                <GlassCard title={cluster.proposed_fix ? 'Proposed Fix' : 'Auto-resolvable'}>
+                    {cluster.proposed_fix ? (
+                        <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                                        {cluster.proposed_fix.summary}
+                                    </p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Proposed by {cluster.proposed_fix.proposed_by || 'agent'}
+                                        {cluster.proposed_fix.proposed_at && (
+                                            <> · {new Date(cluster.proposed_fix.proposed_at).toLocaleString()}</>
+                                        )}
+                                        {typeof cluster.proposed_fix.confidence === 'number' && (
+                                            <> · confidence {Math.round(cluster.proposed_fix.confidence * 100)}%</>
+                                        )}
+                                    </p>
+                                    {cluster.proposed_fix.files && cluster.proposed_fix.files.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                                            {cluster.proposed_fix.files.map(f => (
+                                                <span key={f} className="text-[11px] font-mono px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                                                    {f}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                {cluster.resolved_at == null && (
+                                    <button
+                                        onClick={handleApproveFix}
+                                        disabled={approvingFix}
+                                        className="px-4 py-2 text-sm font-medium bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg shadow-sm transition-all disabled:opacity-50 shrink-0"
+                                    >
+                                        {approvingFix ? 'Approving…' : 'Approve & Resolve'}
+                                    </button>
+                                )}
+                            </div>
+                            <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-x-auto max-h-96 border border-gray-200 dark:border-gray-700 whitespace-pre">
+                                {cluster.proposed_fix.diff}
+                            </pre>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-gray-500">
+                            This cluster looks narrow enough for an automated fix (typo, colour,
+                            or null check). An agent can propose a diff via the Agent API.
+                        </p>
+                    )}
                 </GlassCard>
             )}
 

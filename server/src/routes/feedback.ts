@@ -467,4 +467,109 @@ router.patch('/:id/triage', requireAuth, async (req, res) => {
     }
 });
 
+// ──────────────────────────────────────────────────────────────
+// Cluster detail + auto-resolvable fix approval (admin surface)
+// ──────────────────────────────────────────────────────────────
+// Mounted under /api/feedback/clusters/:id to keep the admin paths
+// together. Access control: the user must be able to see at least one
+// feedback row in the cluster (admin or member of the cluster's project).
+
+async function assertClusterAccess(
+    user: JwtPayload,
+    clusterId: string,
+): Promise<{ projectId: string } | { error: number; message: string }> {
+    const result = await query<{ project_id: string }>(
+        `SELECT project_id FROM clusters WHERE id = $1`,
+        [clusterId],
+    );
+    if (result.rows.length === 0) return { error: 404, message: 'Cluster not found' };
+    const projectId = result.rows[0].project_id;
+    const role = await getFreshRole(user.user_id, user.role);
+    if (role !== 'admin') {
+        const projectIds = await getUserProjectIds(user.user_id);
+        if (!projectIds.includes(projectId)) return { error: 403, message: 'Access denied' };
+    }
+    return { projectId };
+}
+
+// Cluster detail — metadata + proposed_fix + summary counts. Used by the
+// admin Feedback Detail page to render the "Proposed Fix" panel when the
+// agent attached a diff via POST /api/v1/agent/.../propose-fix.
+router.get('/clusters/:id', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const access = await assertClusterAccess(user, req.params.id);
+        if ('error' in access) {
+            res.status(access.error).json({ success: false, error: access.message });
+            return;
+        }
+
+        const result = await query<{
+            id: string; project_id: string; feedback_type: string;
+            title: string; submission_count: number; first_seen_at: string;
+            last_seen_at: string; resolved_at: string | null; priority_score: string;
+            is_auto_resolvable: boolean; proposed_fix: Record<string, unknown> | null;
+            canonical_feedback_id: string | null;
+        }>(
+            `SELECT id, project_id, feedback_type, title, submission_count,
+                    first_seen_at, last_seen_at, resolved_at, priority_score,
+                    is_auto_resolvable, proposed_fix, canonical_feedback_id
+               FROM clusters WHERE id = $1`,
+            [req.params.id],
+        );
+        res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// Approve the agent's proposed fix — resolves every member of the cluster
+// and records the approver. Same fan-out guarantees as the agent
+// cluster-close endpoint because it uses the same resolve trigger path.
+router.post('/clusters/:id/approve-fix', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const access = await assertClusterAccess(user, req.params.id);
+        if ('error' in access) {
+            res.status(access.error).json({ success: false, error: access.message });
+            return;
+        }
+
+        const clusterCheck = await query<{ proposed_fix: Record<string, unknown> | null }>(
+            `SELECT proposed_fix FROM clusters WHERE id = $1`,
+            [req.params.id],
+        );
+        const fix = clusterCheck.rows[0]?.proposed_fix;
+        if (!fix) {
+            res.status(400).json({
+                success: false,
+                error: 'No proposed_fix on this cluster. Ask the agent to submit one first.',
+            });
+            return;
+        }
+
+        const note = typeof (fix as any).summary === 'string'
+            ? `Auto-fix: ${(fix as any).summary} (approved by ${user.email})`
+            : `Auto-fix approved by ${user.email}`;
+
+        const result = await query<{ id: string; status: string }>(
+            `UPDATE feedback
+                SET status = 'resolved',
+                    resolved_at = NOW(),
+                    resolved_by = $2,
+                    resolution_note = $3
+              WHERE cluster_id = $1
+                AND status NOT IN ('resolved', 'closed')
+              RETURNING id, status`,
+            [req.params.id, `admin:${user.email}`, note],
+        );
+
+        res.json({ success: true, closed_count: result.rows.length });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
 export default router;

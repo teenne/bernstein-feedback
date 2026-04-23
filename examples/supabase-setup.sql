@@ -318,6 +318,10 @@ CREATE TABLE IF NOT EXISTS clusters (
   priority_score       NUMERIC DEFAULT 0,
   created_at           TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Auto-resolvable flagging columns (idempotent on existing deployments).
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS is_auto_resolvable BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS proposed_fix JSONB;
 CREATE INDEX IF NOT EXISTS idx_clusters_project ON clusters(project_id);
 CREATE INDEX IF NOT EXISTS idx_clusters_unresolved
   ON clusters(project_id, priority_score DESC)
@@ -702,6 +706,45 @@ RETURNS NUMERIC AS $$
 $$ LANGUAGE sql STABLE;
 
 GRANT EXECUTE ON FUNCTION public.feedback_cluster_priority(UUID) TO authenticated, service_role;
+
+-- Auto-resolvable classifier + trigger. Mirrors server/init.sql.
+CREATE OR REPLACE FUNCTION public.classify_cluster_auto_resolvable(p_cluster_id UUID)
+RETURNS BOOLEAN AS $$
+DECLARE
+  v_type TEXT;
+  v_text TEXT;
+  v_keyword_hit BOOLEAN;
+BEGIN
+  SELECT c.feedback_type,
+         LOWER(COALESCE(f.title, '') || ' ' || COALESCE(f.description, ''))
+    INTO v_type, v_text
+    FROM public.clusters c
+    LEFT JOIN public.feedback f ON f.id = c.canonical_feedback_id
+   WHERE c.id = p_cluster_id;
+
+  IF v_type IS NULL OR v_type <> 'bug_report' THEN RETURN FALSE; END IF;
+  IF LENGTH(v_text) > 600 THEN RETURN FALSE; END IF;
+
+  v_keyword_hit := v_text ~* '\m(typo|misspell|spelling|wrong text|wrong label|label says|placeholder text|button text|color|colour|css|margin|padding|alignment|align|null\s*check|undefined|nullref|null\s*reference|nil\s*pointer|404 on|broken link|dead link)\M';
+  RETURN v_keyword_hit;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION public.refresh_cluster_classification()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.is_auto_resolvable := public.classify_cluster_auto_resolvable(NEW.id);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS on_cluster_upsert_classify ON public.clusters;
+CREATE TRIGGER on_cluster_upsert_classify
+  BEFORE INSERT OR UPDATE OF canonical_feedback_id, submission_count
+  ON public.clusters
+  FOR EACH ROW EXECUTE FUNCTION public.refresh_cluster_classification();
+
+GRANT EXECUTE ON FUNCTION public.classify_cluster_auto_resolvable(UUID) TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.feedback_loop_health(p_project_id TEXT DEFAULT NULL)
 RETURNS TABLE (

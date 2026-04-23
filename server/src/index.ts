@@ -16,6 +16,7 @@ import notificationRoutes from './routes/notifications';
 import planRoutes from './routes/plans';
 import healthRoutes from './routes/health';
 import agentRoutes from './routes/agent';
+import integrationsRoutes from './routes/integrations';
 
 dotenv.config();
 
@@ -43,6 +44,8 @@ app.use('/health', healthRoutes);
 // Tier 2: AI agent API — project-API-key auth, deliberately outside
 // /api/auth so CI/agent runners can call it without user JWTs.
 app.use('/api/v1/agent', agentRoutes);
+// Tier 2: inbound webhooks (PostHog error → ticket, etc). X-API-Key auth.
+app.use('/api/v1/integrations', integrationsRoutes);
 
 // Wrap the Express app in a plain http.Server so we can attach the
 // WebSocket upgrade handler on the same port. REST still works

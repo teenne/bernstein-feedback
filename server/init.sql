@@ -13,6 +13,12 @@
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- pgvector is required for AI clustering (Tier 2). Supabase has it
+-- pre-installed. On self-hosted Postgres, install the extension:
+--   apt-get install postgresql-17-pgvector
+-- If unavailable, the cluster worker is a silent no-op — core feedback
+-- still submits + resolves as usual.
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- CASCADE so drops in any order resolve FK dependencies automatically.
 -- (notifications.feedback_id → feedback, feedback_context.feedback_id → feedback,
@@ -136,6 +142,31 @@ CREATE TRIGGER on_project_member_delete_guard
   BEFORE DELETE ON public.project_members
   FOR EACH ROW EXECUTE FUNCTION public.prevent_owner_removal();
 
+-- ============================================================
+-- Tier 2: Clusters (AI ticket deduplication)
+-- A cluster is a group of feedback rows that are "the same issue."
+-- Rows are grouped by the cluster worker based on embedding similarity.
+-- canonical_feedback_id points at the first ticket to start the cluster
+-- (used as the representative title/description in the admin list).
+-- priority_score is computed by feedback_cluster_priority() — see below.
+-- ============================================================
+CREATE TABLE clusters (
+  id                   UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  feedback_type        TEXT NOT NULL CHECK (feedback_type IN ('feedback', 'bug_report', 'feature_request')),
+  canonical_feedback_id UUID,   -- FK added after feedback table is created
+  title                TEXT NOT NULL,
+  submission_count     INT  NOT NULL DEFAULT 1,
+  first_seen_at        TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at         TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at          TIMESTAMPTZ,
+  priority_score       NUMERIC DEFAULT 0,
+  created_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_clusters_project ON clusters(project_id);
+CREATE INDEX idx_clusters_unresolved ON clusters(project_id, priority_score DESC) WHERE resolved_at IS NULL;
+
 CREATE TABLE feedback (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id TEXT NOT NULL,
@@ -189,6 +220,13 @@ CREATE TABLE feedback (
   labels TEXT[] NOT NULL DEFAULT '{}',
   priority TEXT CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
 
+  -- Tier 2 Agent API: investigation notes authored by an AI coding
+  -- assistant. Separate from `resolution_note` because agents add
+  -- context while a ticket is still open. Array of
+  -- {at: timestamptz, author: text, note: text} objects, appended via
+  -- POST /api/v1/agent/:projectId/feedback/:id/note.
+  agent_notes JSONB NOT NULL DEFAULT '[]',
+
   -- Session provider fields (Tier 1) — populated when the host app
   -- configures a `sessionProvider` (PostHog, LogRocket, FullStory, etc.).
   -- Nullable so session-less hosts keep working unchanged.
@@ -197,8 +235,33 @@ CREATE TABLE feedback (
   session_replay_url  TEXT,   -- deep link into the recorded session
   user_properties     JSONB,  -- identity traits (plan, role, custom fields)
 
+  -- Tier 2: cluster assignment. Nullable — the cluster worker populates
+  -- it asynchronously after computing the embedding. Rows without a
+  -- cluster are treated as standalone tickets in the admin UI.
+  cluster_id UUID REFERENCES clusters(id) ON DELETE SET NULL,
+
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Now that feedback exists, complete the circular FK from clusters.
+ALTER TABLE clusters
+  ADD CONSTRAINT clusters_canonical_fk
+  FOREIGN KEY (canonical_feedback_id) REFERENCES feedback(id) ON DELETE SET NULL;
+
+-- Feedback embeddings — stored in a sidecar table so the main feedback
+-- row stays lean. One row per feedback; populated by the cluster worker.
+CREATE TABLE feedback_embeddings (
+  feedback_id     UUID PRIMARY KEY REFERENCES feedback(id) ON DELETE CASCADE,
+  embedding       vector(1536) NOT NULL,   -- OpenAI text-embedding-3-small dim
+  embedding_model TEXT NOT NULL,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- IVFFlat index for fast cosine-similarity search. Lists=100 is good
+-- up to ~10k rows; increase for larger datasets.
+CREATE INDEX idx_feedback_embeddings_cosine
+  ON feedback_embeddings USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100);
 
 -- Technical context (heavy data, separated for performance)
 CREATE TABLE feedback_context (
@@ -274,6 +337,12 @@ CREATE INDEX idx_feedback_status ON feedback(status);
 CREATE INDEX idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
 CREATE INDEX idx_feedback_labels ON feedback USING GIN (labels);
 CREATE INDEX idx_feedback_session_id ON feedback(session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX idx_feedback_cluster ON feedback(cluster_id) WHERE cluster_id IS NOT NULL;
+-- Needed for the worker's "unembedded" poll. Fast even when the table grows
+-- because the partial index only covers rows still awaiting embedding.
+CREATE INDEX idx_feedback_needs_embedding
+  ON feedback(id)
+  WHERE cluster_id IS NULL;
 CREATE INDEX idx_feedback_type ON feedback(type);
 CREATE INDEX idx_feedback_created ON feedback(created_at DESC);
 CREATE INDEX idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
@@ -282,6 +351,22 @@ CREATE INDEX idx_feedback_context_fid ON feedback_context(feedback_id);
 CREATE INDEX idx_notifications_user ON notifications(project_id, user_id, read);
 CREATE INDEX idx_notifications_feedback ON notifications(feedback_id);
 CREATE INDEX idx_project_usage_project_month ON project_usage(project_id, month);
+
+-- ============================================================
+-- BYOK AI keys — per-project OpenAI credentials for the cluster worker
+-- Encrypted with pgp_sym_encrypt using AI_KEY_ENCRYPTION_SECRET.
+-- The raw key never leaves the server.
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS project_ai_keys (
+  project_id    TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  provider      TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai')),
+  encrypted_key BYTEA NOT NULL,
+  key_hint      TEXT NOT NULL,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
 
 -- ============================================================
 -- New Feedback Notification Trigger
@@ -357,18 +442,53 @@ RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status IN ('resolved', 'closed')
      AND COALESCE(OLD.status, '') NOT IN ('resolved', 'closed')
-     AND NEW.user_id IS NOT NULL
-     AND NEW.user_id <> ''
   THEN
+    -- Agent API guard: when closing a cluster via POST /agent/clusters/:id/close,
+    -- multiple feedback rows transition open → resolved/closed in the same
+    -- transaction. Each firing of this trigger would otherwise re-insert
+    -- N notifications per cluster member. Skip fan-out if the cluster's
+    -- resolved_at was already set (by an earlier firing in this txn or a
+    -- prior manual resolve). First row still fans out because the
+    -- resolved_at UPDATE below runs at the end of this branch.
+    IF NEW.cluster_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM public.clusters
+          WHERE id = NEW.cluster_id AND resolved_at IS NOT NULL
+       )
+    THEN
+      RETURN NEW;
+    END IF;
+
+    -- Tier 2: fan out to EVERY reporter in the same cluster, not
+    -- just the original submitter. When the feedback has no cluster
+    -- (cluster_id IS NULL — embedding worker hasn't run yet), this
+    -- still just hits the single submitter.
     INSERT INTO public.notifications (project_id, feedback_id, user_id, type, title, message)
-    VALUES (
+    SELECT
       NEW.project_id,
       NEW.id,
-      NEW.user_id,
+      f.user_id,
       'resolved',
       'Your feedback "' || COALESCE(NEW.title, '(no title)') || '" has been resolved',
       NEW.resolution_note
-    );
+    FROM public.feedback f
+    WHERE (
+        -- Same cluster (fan-out case)
+        (NEW.cluster_id IS NOT NULL AND f.cluster_id = NEW.cluster_id)
+        -- Or no cluster, single submitter (legacy / pre-cluster case)
+        OR (NEW.cluster_id IS NULL AND f.id = NEW.id)
+      )
+      AND f.user_id IS NOT NULL
+      AND f.user_id <> ''
+    GROUP BY f.user_id;  -- one notification per unique recipient
+
+    -- Mark the whole cluster as resolved if applicable
+    IF NEW.cluster_id IS NOT NULL THEN
+      UPDATE public.clusters
+         SET resolved_at = NOW()
+       WHERE id = NEW.cluster_id
+         AND resolved_at IS NULL;
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -385,56 +505,75 @@ CREATE TRIGGER on_feedback_resolved
 CREATE OR REPLACE FUNCTION public.queue_email_on_feedback_resolved()
 RETURNS TRIGGER AS $$
 DECLARE
-  recipient_email TEXT;
-  body TEXT;
   project_name TEXT;
+  body TEXT;
 BEGIN
   IF NEW.status IN ('resolved', 'closed')
      AND COALESCE(OLD.status, '') NOT IN ('resolved', 'closed')
   THEN
-    recipient_email := NEW.email;
-    IF recipient_email IS NULL OR recipient_email = '' THEN
-      SELECT email INTO recipient_email
-        FROM public.user_roles
-       WHERE user_id = NEW.user_id
-       LIMIT 1;
+    -- Agent API guard: matches handle_feedback_resolved(). Without this,
+    -- a bulk cluster-close would queue N resolve emails per recipient
+    -- (one per feedback member) even though the dedupe_key includes the
+    -- feedback_id.
+    IF NEW.cluster_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM public.clusters
+          WHERE id = NEW.cluster_id AND resolved_at IS NOT NULL
+       )
+    THEN
+      RETURN NEW;
     END IF;
 
-    IF recipient_email IS NOT NULL AND recipient_email <> '' THEN
-      SELECT COALESCE(name, id) INTO project_name
-        FROM public.projects WHERE id = NEW.project_id;
+    SELECT COALESCE(name, id) INTO project_name
+      FROM public.projects WHERE id = NEW.project_id;
 
-      body := 'Hi,' || E'\n\n' ||
-              'Your recent feedback has been marked as resolved:' || E'\n\n' ||
-              '  "' || COALESCE(NEW.title, '(no title)') || '"' || E'\n\n';
-      IF NEW.resolution_note IS NOT NULL AND NEW.resolution_note <> '' THEN
-        body := body || 'The developer left a note:' || E'\n  ' || NEW.resolution_note || E'\n\n';
-      END IF;
-      body := body || 'Thanks for helping improve ' || COALESCE(project_name, NEW.project_id) || '.' || E'\n\n' ||
-              '— Bernstein Feedback';
+    body := 'Hi,' || E'\n\n' ||
+            'Your recent feedback has been marked as resolved:' || E'\n\n' ||
+            '  "' || COALESCE(NEW.title, '(no title)') || '"' || E'\n\n';
+    IF NEW.resolution_note IS NOT NULL AND NEW.resolution_note <> '' THEN
+      body := body || 'The developer left a note:' || E'\n  ' || NEW.resolution_note || E'\n\n';
+    END IF;
+    body := body || 'Thanks for helping improve ' || COALESCE(project_name, NEW.project_id) || '.' || E'\n\n' ||
+            '— Bernstein Feedback';
 
-      INSERT INTO public.email_queue
-        (to_email, subject, body_text, event_type, context, project_id, feedback_id, dedupe_key)
-      VALUES (
-        recipient_email,
-        'Your feedback in ' || COALESCE(project_name, NEW.project_id) || ' has been resolved',
-        body,
-        'resolved',
-        jsonb_build_object(
-          'project_id',      NEW.project_id,
-          'project_name',    COALESCE(project_name, NEW.project_id),
-          'feedback_id',     NEW.id,
-          'feedback_title',  COALESCE(NEW.title, '(no title)'),
-          'feedback_type',   NEW.type,
-          'resolution_note', NEW.resolution_note,
-          'resolved_at',     NEW.resolved_at
-        ),
-        NEW.project_id,
-        NEW.id,
-        'resolved:' || NEW.id::text
+    -- Tier 2: fan out to every unique email in the cluster. When there's
+    -- no cluster, this still just hits the single submitter. Dedupe key
+    -- includes the recipient email so the same resolve doesn't double-send
+    -- when a user reported the same issue from two emails.
+    INSERT INTO public.email_queue
+      (to_email, subject, body_text, event_type, context, project_id, feedback_id, dedupe_key)
+    SELECT
+      recipient_email,
+      'Your feedback in ' || COALESCE(project_name, NEW.project_id) || ' has been resolved',
+      body,
+      'resolved',
+      jsonb_build_object(
+        'project_id',      NEW.project_id,
+        'project_name',    COALESCE(project_name, NEW.project_id),
+        'feedback_id',     NEW.id,
+        'feedback_title',  COALESCE(NEW.title, '(no title)'),
+        'feedback_type',   NEW.type,
+        'resolution_note', NEW.resolution_note,
+        'resolved_at',     NEW.resolved_at
+      ),
+      NEW.project_id,
+      NEW.id,
+      'resolved:' || NEW.id::text || ':' || recipient_email
+    FROM (
+      -- Recipient source: feedback.email from any cluster member,
+      -- falling back to user_roles.email by user_id.
+      SELECT DISTINCT COALESCE(
+        NULLIF(f.email, ''),
+        (SELECT ur.email FROM public.user_roles ur WHERE ur.user_id = f.user_id LIMIT 1)
+      ) AS recipient_email
+      FROM public.feedback f
+      WHERE (
+          (NEW.cluster_id IS NOT NULL AND f.cluster_id = NEW.cluster_id)
+          OR (NEW.cluster_id IS NULL AND f.id = NEW.id)
       )
-      ON CONFLICT (dedupe_key) DO NOTHING;
-    END IF;
+    ) r
+    WHERE r.recipient_email IS NOT NULL AND r.recipient_email <> ''
+    ON CONFLICT (dedupe_key) DO NOTHING;
   END IF;
   RETURN NEW;
 END;
@@ -562,6 +701,48 @@ DROP TRIGGER IF EXISTS on_notification_pg_notify ON public.notifications;
 CREATE TRIGGER on_notification_pg_notify
   AFTER INSERT ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.notify_new_notification();
+
+-- ============================================================
+-- Tier 2: Cluster priority scoring.
+-- Returns a numeric score that ranks clusters for the AI agent's
+-- backlog + the admin UI. Signals combined:
+--   • submission_count (frequency weight, capped to avoid runaway)
+--   • recency — recent bursts rank above slow trickles
+--   • paid-user weight — clusters with ≥1 user flagged as 'paid'
+--     in user_properties rank higher
+--   • bug_report bonus — bugs rank above feature_requests
+-- Used as: UPDATE clusters SET priority_score = feedback_cluster_priority(id);
+-- Called by the cluster worker on every new submission to that cluster.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.feedback_cluster_priority(p_cluster_id UUID)
+RETURNS NUMERIC AS $$
+  SELECT
+    (
+      -- Frequency: 5 points per submission, capped at 100
+      LEAST(c.submission_count * 5, 100)
+      -- Recency: +30 if last submission was within 24h, +15 within 7d, else 0
+      + CASE
+          WHEN c.last_seen_at > NOW() - INTERVAL '24 hours' THEN 30
+          WHEN c.last_seen_at > NOW() - INTERVAL '7 days'   THEN 15
+          ELSE 0
+        END
+      -- Identity weight: +50 if ANY submission in this cluster came from a paid user
+      + COALESCE((
+          SELECT 50 FROM feedback f
+           WHERE f.cluster_id = c.id
+             AND f.user_properties ->> 'plan' IN ('paid', 'pro', 'enterprise')
+           LIMIT 1
+        ), 0)
+      -- Type bonus: bugs before features before general feedback
+      + CASE c.feedback_type
+          WHEN 'bug_report' THEN 20
+          WHEN 'feature_request' THEN 10
+          ELSE 0
+        END
+    )::NUMERIC AS priority_score
+  FROM clusters c
+  WHERE c.id = p_cluster_id;
+$$ LANGUAGE sql STABLE;
 
 -- ============================================================
 -- P4: Feedback loop health — three metrics computed per project.

@@ -71,7 +71,10 @@ export function AuthToast({ message, kind = 'error', durationMs = 5000, onDismis
         <div
             role={kind === 'error' ? 'alert' : 'status'}
             aria-live={kind === 'error' ? 'assertive' : 'polite'}
-            className={`fixed top-6 right-6 z-50 max-w-sm min-w-[260px] px-4 py-3 rounded-xl border shadow-lg backdrop-blur-sm flex items-start gap-3 transition-all duration-200 ease-out ${palette} ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}
+            // z-[60] keeps the toast above the admin header (`sticky z-50`),
+            // otherwise the header's solid background clips all but the top
+            // ~24px border of the toast, leaving only a green sliver visible.
+            className={`fixed top-6 right-6 z-[60] max-w-sm min-w-[260px] px-4 py-3 rounded-xl border shadow-lg backdrop-blur-sm flex items-start gap-3 transition-all duration-200 ease-out ${palette} ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}
         >
             <span className="flex-shrink-0 mt-0.5">{icon}</span>
             <span className="text-sm font-medium leading-snug flex-1">{message}</span>

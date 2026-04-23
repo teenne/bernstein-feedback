@@ -269,6 +269,16 @@ export interface FeedbackConfig {
   notificationPollInterval?: number;
   /** Enable notification badge on feedback button (default: true when userId is set) */
   enableNotifications?: boolean;
+  /**
+   * Scope of the notification feed.
+   * - `'project'` (default) — only notifications for `config.projectId`.
+   * - `'all'`               — every notification the authenticated user can access.
+   *
+   * Use `'all'` in admin dashboards where the project dropdown scopes the
+   * *feedback list* but the notification bell should still light up for
+   * activity across every project the user owns / is a member of / admins.
+   */
+  notificationScope?: 'project' | 'all';
 
   // Screen identity (update these as user navigates)
   /** Stable screen identifier (e.g., 'checkout', 'user-settings') */

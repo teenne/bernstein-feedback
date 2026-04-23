@@ -84,6 +84,18 @@ export default function LoginPage() {
                 }
                 // On success, AuthGateway's onAuthStateChange listener handles redirect.
             } else {
+                // Pre-stage the success toast before signUp for the same
+                // reason as login: Supabase can fire onAuthStateChange
+                // (SIGNED_IN) before signUp's promise resolves when the
+                // project has auto-confirm enabled. If we set the flash
+                // after await, App.tsx's drain has already run.
+                // The pre-stage is cleared below when signup either errors
+                // or requires email confirmation (in which case we stay on
+                // the login page and show an inline message, not a toast).
+                sessionStorage.setItem(
+                    'auth_flash',
+                    JSON.stringify({ kind: 'success', message: 'Account created successfully.' }),
+                );
                 const { data, error: err } = await supabase.auth.signUp({
                     email: email.toLowerCase(),
                     password,
@@ -92,6 +104,7 @@ export default function LoginPage() {
                     },
                 });
                 if (err) {
+                    sessionStorage.removeItem('auth_flash');
                     setError(err.message);
                 } else if (data.user && (!data.user.identities || data.user.identities.length === 0)) {
                     // Supabase's email-enumeration protection: when the email
@@ -99,15 +112,20 @@ export default function LoginPage() {
                     // identities: []. We surface this as a clear error so the
                     // user isn't left wondering why no confirmation email ever
                     // arrives.
+                    sessionStorage.removeItem('auth_flash');
                     setError('An account with this email already exists. Please sign in instead.');
                 } else if (data.user && !data.session) {
-                    // Email confirmation required
+                    // Email confirmation required — user stays on LoginPage,
+                    // so clear the pre-staged toast and show inline info.
+                    sessionStorage.removeItem('auth_flash');
                     setInfo('Account created. Check your email to confirm before signing in.');
                     setMode('login');
                     setPassword('');
                     setConfirmPassword('');
                 }
-                // If session is returned, AuthGateway redirects automatically.
+                // If session is returned, AuthGateway redirects automatically
+                // and the pre-staged "Account created successfully." toast
+                // displays on the authed tree.
             }
         } catch (err: any) {
             setError(err?.message || 'Authentication failed.');
@@ -122,11 +140,19 @@ export default function LoginPage() {
         }
         resetMessages();
         setLoading(true);
+        // Pre-stage the success toast before the OAuth round-trip. Persists
+        // across the external-provider redirect via sessionStorage (survives
+        // same-tab navigation). Cleared if the initial OAuth init errors.
+        sessionStorage.setItem(
+            'auth_flash',
+            JSON.stringify({ kind: 'success', message: 'Signed in successfully.' }),
+        );
         const { error: err } = await supabase.auth.signInWithOAuth({
             provider,
             options: { redirectTo: `${window.location.origin}/feedback` },
         });
         if (err) {
+            sessionStorage.removeItem('auth_flash');
             setError(err.message);
             setLoading(false);
         }

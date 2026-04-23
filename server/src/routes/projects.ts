@@ -1,7 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db';
-import { requireAuth, getFreshRole, JwtPayload } from '../middleware/auth';
+import { requireAuth, getFreshRole, requireProjectOwner, JwtPayload } from '../middleware/auth';
+import { requirePlanFeature } from '../helpers/plan';
+import {
+    saveProjectAiKey,
+    getProjectAiKeyMetadata,
+    deleteProjectAiKey,
+    isByokConfigured,
+    type AiKeyProvider,
+} from '../helpers/aiKeys';
 import { CreateProjectSchema, UpdateProjectSchema, AddMemberSchema } from '../schemas/project';
 import { ProjectMember, Project, UserRole } from '../schemas/tables';
 
@@ -176,8 +184,9 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
 });
 
-// Update project
-router.patch('/:id', requireAuth, async (req, res) => {
+// Update project — owner-only. Plan changes flow through here too, so
+// the owner gate prevents a team member from flipping their own tier.
+router.patch('/:id', requireAuth, requireProjectOwner, async (req, res) => {
     try {
         const data = UpdateProjectSchema.parse(req.body);
         const sets: string[] = [];
@@ -211,8 +220,148 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
 });
 
-// Delete project
-router.delete('/:id', requireAuth, async (req, res) => {
+/**
+ * Upgrade a project to a paid plan.
+ *
+ * This is the dedicated billing seam. Two modes:
+ *
+ *   • BILLING_PROVIDER unset (default)
+ *       Flips `plan`/`plan_id` to the target immediately. Fine for
+ *       single-tenant / demo / self-hosted deploys where payment is
+ *       handled out-of-band. This is the current behavior of the
+ *       "Upgrade to Paid" button in the dashboard.
+ *
+ *   • BILLING_PROVIDER=<name> (e.g. 'stripe')
+ *       The server does NOT flip the plan here. It returns 501 so a
+ *       real checkout flow can be wired in. When the provider's
+ *       webhook fires with a confirmed payment, call
+ *       POST /api/projects/:id/billing/confirm (server-to-server) to
+ *       flip the plan. Until that route is implemented for the chosen
+ *       provider, upgrades are blocked — which is the safe default.
+ *
+ * Keeping this as a separate route from PATCH /:id means callers can
+ * distinguish "change project metadata" from "start billing" without
+ * parsing the body.
+ */
+router.post('/:id/upgrade', requireAuth, requireProjectOwner, async (req, res) => {
+    try {
+        const targetPlan = typeof req.body?.plan_id === 'string' ? req.body.plan_id : 'paid';
+        const provider = process.env.BILLING_PROVIDER?.trim();
+
+        if (provider) {
+            res.status(501).json({
+                success: false,
+                error: `Billing provider "${provider}" is configured but its checkout callback is not yet wired. Contact support.`,
+                provider,
+                target_plan: targetPlan,
+            });
+            return;
+        }
+
+        const result = await query<Project>(
+            `UPDATE projects
+                SET plan = $1,
+                    plan_id = $1
+              WHERE id = $2
+            RETURNING *`,
+            [targetPlan, req.params.id],
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ success: false, error: 'Project not found' });
+            return;
+        }
+        res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// ──────────────────────────────
+// BYOK AI keys (paid-plan, owner-only)
+// ──────────────────────────────
+// The admin UI uses these to manage a project's OpenAI credential for
+// the cluster worker. Raw key material is encrypted on write via
+// pgp_sym_encrypt and never returned on read — only the display hint.
+
+// GET metadata: is a key configured + its hint. Returns 200 with data=null
+// when nothing is stored yet, rather than 404, so the UI can distinguish
+// "never set" from "route broken".
+router.get(
+    '/:id/ai-key',
+    requireAuth,
+    requireProjectOwner,
+    requirePlanFeature('ai_clustering'),
+    async (req, res) => {
+        try {
+            const meta = await getProjectAiKeyMetadata(req.params.id);
+            res.json({
+                success: true,
+                data: meta,
+                byok_configured: isByokConfigured(),
+            });
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            res.status(500).json({ success: false, error: msg });
+        }
+    },
+);
+
+// PUT: upsert the key. Body: { provider: 'openai', api_key: 'sk-...' }
+router.put(
+    '/:id/ai-key',
+    requireAuth,
+    requireProjectOwner,
+    requirePlanFeature('ai_clustering'),
+    async (req, res) => {
+        try {
+            const provider = (req.body?.provider ?? 'openai') as AiKeyProvider;
+            const rawKey = typeof req.body?.api_key === 'string' ? req.body.api_key : '';
+            if (provider !== 'openai') {
+                res.status(400).json({
+                    success: false,
+                    error: `Provider "${provider}" is not supported yet. Only "openai" for now.`,
+                });
+                return;
+            }
+            if (!rawKey) {
+                res.status(400).json({ success: false, error: 'api_key is required.' });
+                return;
+            }
+            const meta = await saveProjectAiKey(req.params.id, provider, rawKey);
+            res.json({ success: true, data: meta });
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            // 400 for "not configured" / "too short" — caller error, not a server bug.
+            const status = /AI_KEY_ENCRYPTION_SECRET|too short/.test(msg) ? 400 : 500;
+            res.status(status).json({ success: false, error: msg });
+        }
+    },
+);
+
+router.delete(
+    '/:id/ai-key',
+    requireAuth,
+    requireProjectOwner,
+    requirePlanFeature('ai_clustering'),
+    async (req, res) => {
+        try {
+            const removed = await deleteProjectAiKey(req.params.id);
+            if (!removed) {
+                res.status(404).json({ success: false, error: 'No key to remove.' });
+                return;
+            }
+            res.json({ success: true });
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            res.status(500).json({ success: false, error: msg });
+        }
+    },
+);
+
+// Delete project — owner-only.
+router.delete('/:id', requireAuth, requireProjectOwner, async (req, res) => {
     try {
         const result = await query<Pick<Project, 'id'>>('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
         if (result.rows.length === 0) {

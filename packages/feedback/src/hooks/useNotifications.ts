@@ -19,7 +19,16 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
   const [isLoading, setIsLoading] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const enabled = config.enableNotifications !== false && !!config.userId && !!config.projectId;
+  // In 'all' scope we don't need a projectId — the bell is showing every
+  // notification the user has access to. In 'project' scope we do.
+  const scope = config.notificationScope ?? 'project';
+  const enabled =
+    config.enableNotifications !== false &&
+    !!config.userId &&
+    (scope === 'all' || !!config.projectId);
+  // When scope is 'all', pass empty string to downstream calls so adapters
+  // + the HTTP path can distinguish "no filter" from "missing projectId".
+  const scopedProjectId = scope === 'all' ? '' : (config.projectId || '');
   const pollInterval = config.notificationPollInterval ?? 30000;
 
   // Derive the notifications API base URL
@@ -58,7 +67,7 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
       // baseUrl (the local-server fallback), even in Supabase mode. Without this
       // ordering we'd hit the local Express server while talking to Supabase.
       if (typeof adapterAny?.getNotifications === 'function') {
-        const result = await adapterAny.getNotifications(config.projectId, config.userId);
+        const result = await adapterAny.getNotifications(scopedProjectId, config.userId);
         if (result?.data) {
           setNotifications(result.data);
         }
@@ -69,7 +78,12 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
       const baseUrl = getBaseUrl();
       if (baseUrl) {
         try {
-          const url = `${baseUrl}?project_id=${encodeURIComponent(config.projectId)}&user_id=${encodeURIComponent(config.userId!)}`;
+          const params = new URLSearchParams();
+          // Omit project_id when scope='all' — the server filters by
+          // user_id and enforces accessibility via getUserProjectIds.
+          if (scopedProjectId) params.set('project_id', scopedProjectId);
+          params.set('user_id', config.userId!);
+          const url = `${baseUrl}?${params.toString()}`;
           const response = await fetch(url);
           if (response.ok) {
             const json = await response.json();
@@ -86,7 +100,7 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
     } finally {
       setIsLoading(false);
     }
-  }, [enabled, getBaseUrl, config.projectId, config.userId, config.adapter]);
+  }, [enabled, getBaseUrl, scopedProjectId, config.userId, config.adapter]);
 
   const markAsRead = useCallback(async (id: string) => {
     // Optimistic update
@@ -123,7 +137,7 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
 
       // Prefer adapter direct (Supabase) over HTTP — see markAsRead for rationale.
       if (typeof adapterAny?.markAllNotificationsRead === 'function') {
-        await adapterAny.markAllNotificationsRead(config.projectId, config.userId);
+        await adapterAny.markAllNotificationsRead(scopedProjectId, config.userId);
         return;
       }
 
@@ -133,13 +147,18 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
         await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id: config.projectId, user_id: config.userId }),
+          // Omit project_id when scope='all' so the server marks every
+          // accessible unread notification for this user.
+          body: JSON.stringify({
+            ...(scopedProjectId ? { project_id: scopedProjectId } : {}),
+            user_id: config.userId,
+          }),
         });
       }
     } catch {
       fetchNotifications();
     }
-  }, [getBaseUrl, config.adapter, config.projectId, config.userId, fetchNotifications]);
+  }, [getBaseUrl, config.adapter, scopedProjectId, config.userId, fetchNotifications]);
 
   // Realtime (Supabase) — when the adapter exposes subscribeToNotifications,
   // skip interval polling and refetch on every push from Postgres.
@@ -156,7 +175,7 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
 
     let unsubscribe: (() => void) | null = null;
     try {
-      unsubscribe = subscribe(config.projectId, config.userId, () => {
+      unsubscribe = subscribe(scopedProjectId, config.userId, () => {
         console.log('[useNotifications] Socket onChange triggered -> fetching');
         fetchNotifications();
       });
@@ -170,7 +189,7 @@ export function useNotifications(config: FeedbackConfig): UseNotificationsResult
         try { unsubscribe(); } catch { /* ignore */ }
       }
     };
-  }, [enabled, config.adapter, config.projectId, config.userId, fetchNotifications]);
+  }, [enabled, config.adapter, scopedProjectId, config.userId, fetchNotifications]);
 
   // Polling fallback — only runs when the adapter has no realtime subscription.
   useEffect(() => {

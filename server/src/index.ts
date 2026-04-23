@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectWithRetry } from './db';
 import { startEmailWorker } from './workers/emailWorker';
+import { startClusterWorker } from './workers/clusterWorker';
 import { startPgListener } from './lib/pgListener';
 import { attachNotificationWs } from './lib/notificationsWs';
 
@@ -14,6 +15,7 @@ import feedbackRoutes from './routes/feedback';
 import notificationRoutes from './routes/notifications';
 import planRoutes from './routes/plans';
 import healthRoutes from './routes/health';
+import agentRoutes from './routes/agent';
 
 dotenv.config();
 
@@ -38,6 +40,9 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api', planRoutes);          // mounts /api/projects/:id/plan-status & /api/projects/:id/usage
 app.use('/health', healthRoutes);
+// Tier 2: AI agent API — project-API-key auth, deliberately outside
+// /api/auth so CI/agent runners can call it without user JWTs.
+app.use('/api/v1/agent', agentRoutes);
 
 // Wrap the Express app in a plain http.Server so we can attach the
 // WebSocket upgrade handler on the same port. REST still works
@@ -53,6 +58,12 @@ const startServer = async () => {
     // sends any pending rows via SMTP. No-op (with a log line) when
     // SMTP_USER / SMTP_PASS aren't configured.
     startEmailWorker();
+
+    // Tier 2: kick off the cluster worker. It polls feedback rows that
+    // don't have a cluster yet, embeds them via OpenAI, and assigns
+    // them to an existing cluster or starts a new one. No-op (with a
+    // log line) when OPENAI_API_KEY isn't set.
+    startClusterWorker();
 
     // Attach WebSocket endpoint at /api/notifications/ws.
     // Admin apps pointed at this Node server use it instead of polling

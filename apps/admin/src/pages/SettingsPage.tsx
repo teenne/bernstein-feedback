@@ -2,7 +2,13 @@ import { useState, useEffect } from "react";
 import { FeedbackConfigState } from "../hooks/useFeedbackConfig";
 import { GlassCard } from "../components/GlassCard";
 import { LayoutWrapper } from "../components/LayoutWrapper";
-import { fetchProjectUsage } from "../lib/feedbackApi";
+import {
+  fetchProjectUsage,
+  fetchProjectAiKey,
+  saveProjectAiKey,
+  deleteProjectAiKey,
+  type AiKeyMetadata,
+} from "../lib/feedbackApi";
 import { useFeedback } from "akk-feedback";
 
 interface SettingsPageProps {
@@ -458,6 +464,15 @@ export function SettingsPage({
           </div>
         </div>
       </div>
+      {/* BYOK — AI clustering key. Only shown for paid projects so free
+          users don't see a dead section. Free-plan owners hit the upgrade
+          path through the usage card / dashboard. */}
+      {isPro && activeProjectId && (
+        <div className="mt-8">
+          <AiClusteringKeyCard projectId={activeProjectId} />
+        </div>
+      )}
+
       {/* Developer Tools / Demo Mode — Admin only */}
       {isAdmin && (
         <div className="mt-12 pt-6 border-t border-gray-200 dark:border-white/10 opacity-75 hover:opacity-100 transition-opacity">
@@ -531,6 +546,145 @@ export function SettingsPage({
 }
 
 // Sub-components for cleaner JSX
+
+function AiClusteringKeyCard({ projectId }: { projectId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [meta, setMeta] = useState<AiKeyMetadata | null>(null);
+  const [byokConfigured, setByokConfigured] = useState(true);
+  const [apiKey, setApiKey] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetchProjectAiKey(projectId);
+      setMeta(res.data);
+      setByokConfigured(res.byok_configured);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load key status");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [projectId]);
+
+  const onSave = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const saved = await saveProjectAiKey(projectId, apiKey);
+      setMeta(saved);
+      setApiKey("");
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onRemove = async () => {
+    if (!confirm("Remove the AI clustering key for this project? Clustering will fall back to the global key, or stop if none is configured.")) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await deleteProjectAiKey(projectId);
+      setMeta(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Remove failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <GlassCard title="AI Clustering Key (BYOK)">
+      {loading ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
+      ) : !byokConfigured ? (
+        <div className="text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 rounded-lg p-3 border border-amber-200 dark:border-amber-500/30">
+          BYOK is not yet enabled on this server. Set <code className="text-xs bg-white/50 dark:bg-white/5 px-1 rounded">AI_KEY_ENCRYPTION_SECRET</code> in <code className="text-xs bg-white/50 dark:bg-white/5 px-1 rounded">server/.env</code> and restart. Clustering will continue to use the global <code className="text-xs bg-white/50 dark:bg-white/5 px-1 rounded">OPENAI_API_KEY</code> until you do.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Paste an OpenAI API key to have this project's clustering charged to your own account. Keys are encrypted at rest and never leave the server.
+          </p>
+
+          {meta ? (
+            <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30">
+              <div>
+                <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                  Key configured
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">
+                  {meta.key_hint} · updated {new Date(meta.updated_at).toLocaleString()}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onRemove}
+                disabled={submitting}
+                className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10">
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                No key set. Falls back to the server's global key, if configured.
+              </span>
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 block">
+              {meta ? "Replace key" : "Set key"}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-proj-..."
+                autoComplete="off"
+                spellCheck={false}
+                className="flex-1 px-3 py-2 text-sm font-mono rounded-lg bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none text-gray-900 dark:text-white"
+              />
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={submitting || apiKey.trim().length < 16}
+                className="px-4 py-2 text-sm font-semibold bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {submitting ? "Saving…" : "Save"}
+              </button>
+            </div>
+            {justSaved && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1.5">
+                Saved. New embeddings will use this key on the next worker poll.
+              </p>
+            )}
+            {error && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1.5">{error}</p>
+            )}
+          </div>
+
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Get a key at <span className="font-mono">platform.openai.com/api-keys</span>. The worker calls <span className="font-mono">text-embedding-3-small</span> (~$0.02 per 1M tokens).
+          </p>
+        </div>
+      )}
+    </GlassCard>
+  );
+}
 
 function Toggle({
   label,

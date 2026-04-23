@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage } from '../lib/feedbackApi';
+import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage, fetchClusterSiblings } from '../lib/feedbackApi';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -28,6 +28,12 @@ export function FeedbackDetailPage() {
     // P3: triage state. labelDraft is the text in the "Add label" input.
     const [triageUpdating, setTriageUpdating] = useState(false);
     const [labelDraft, setLabelDraft] = useState('');
+    // Tier 2: sibling tickets in the same cluster. Fetched after the
+    // main feedback loads; hidden if empty.
+    const [clusterSiblings, setClusterSiblings] = useState<Array<{
+        id: string; title: string; email: string | null; user_id: string | null;
+        created_at: string; status: string | null;
+    }>>([]);
 
     const handlePriorityChange = async (newPriority: FeedbackPriority | null) => {
         if (!item || triageUpdating) return;
@@ -95,6 +101,12 @@ export function FeedbackDetailPage() {
             try {
                 const data = await fetchFeedbackById(id!);
                 setItem(data);
+                // Fetch cluster siblings in parallel — non-blocking. If the
+                // cluster has no siblings (or no cluster at all) the card
+                // below stays hidden.
+                fetchClusterSiblings(id!)
+                    .then(setClusterSiblings)
+                    .catch(() => setClusterSiblings([]));
             } catch (err: any) {
                 setError(err.message || 'Failed to load feedback');
             }
@@ -265,6 +277,46 @@ export function FeedbackDetailPage() {
                                 </div>
                             </div>
                         )}
+                    </div>
+                </GlassCard>
+            )}
+
+            {/* Cluster Siblings (Tier 2) — other feedback rows the AI grouped
+                as the "same issue." Hidden when there are no siblings so the
+                card never clutters the layout for single-reporter tickets. */}
+            {clusterSiblings.length > 0 && (
+                <GlassCard title={`Also reported by ${clusterSiblings.length} other user${clusterSiblings.length === 1 ? '' : 's'}`}>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                        The AI grouped these submissions as the same issue. Resolving this ticket
+                        notifies everyone below.
+                    </p>
+                    <div className="divide-y divide-gray-100 dark:divide-white/5">
+                        {clusterSiblings.map((sib) => (
+                            <button
+                                key={sib.id}
+                                onClick={() => navigate(`/feedback/${sib.id}`)}
+                                className="w-full flex items-center justify-between py-2.5 gap-3 hover:bg-gray-50/50 dark:hover:bg-white/[0.02] transition-colors text-left"
+                            >
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                        {sib.title}
+                                    </p>
+                                    <p className="text-xs text-gray-400 truncate">
+                                        {sib.email || sib.user_id || 'Anonymous'}
+                                        <span className="mx-1.5">·</span>
+                                        {new Date(sib.created_at).toLocaleDateString()}
+                                    </p>
+                                </div>
+                                {sib.status && sib.status !== 'open' && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 uppercase font-semibold tracking-wider shrink-0">
+                                        {sib.status.replace('_', ' ')}
+                                    </span>
+                                )}
+                                <svg className="w-4 h-4 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                </svg>
+                            </button>
+                        ))}
                     </div>
                 </GlassCard>
             )}

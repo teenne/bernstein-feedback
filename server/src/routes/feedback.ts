@@ -116,7 +116,15 @@ router.get('/', requireAuth, async (req, res) => {
         const user = (req as any).user as JwtPayload;
         const { project_id, type, status, severity, priority, limit = '50', offset = '0' } = req.query;
 
-        let sql = 'SELECT id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, session_id, session_provider, session_replay_url, user_properties, created_at FROM feedback';
+        let sql = `
+            SELECT f.id, f.project_id, f.type, f.title, f.description, f.category, f.severity, f.impact,
+                   f.email, f.screen_id, f.page_name, f.user_id, f.tenant_id, f.screenshots, f.status,
+                   f.resolved_at, f.labels, f.priority, f.session_id, f.session_provider,
+                   f.session_replay_url, f.user_properties, f.created_at,
+                   f.cluster_id, c.submission_count AS cluster_submission_count
+              FROM feedback f
+              LEFT JOIN clusters c ON c.id = f.cluster_id
+        `;
         const conditions: string[] = [];
         const values: any[] = [];
         let paramIndex = 1;
@@ -128,18 +136,18 @@ router.get('/', requireAuth, async (req, res) => {
                 res.json({ success: true, data: [], total: 0 });
                 return;
             }
-            conditions.push(`project_id = ANY($${paramIndex++})`);
+            conditions.push(`f.project_id = ANY($${paramIndex++})`);
             values.push(projectIds);
         }
 
-        if (project_id) { conditions.push(`project_id = $${paramIndex++}`); values.push(project_id); }
-        if (type) { conditions.push(`type = $${paramIndex++}`); values.push(type); }
-        if (status) { conditions.push(`status = $${paramIndex++}`); values.push(status); }
-        if (severity) { conditions.push(`severity = $${paramIndex++}`); values.push(severity); }
-        if (priority) { conditions.push(`priority = $${paramIndex++}`); values.push(priority); }
+        if (project_id) { conditions.push(`f.project_id = $${paramIndex++}`); values.push(project_id); }
+        if (type) { conditions.push(`f.type = $${paramIndex++}`); values.push(type); }
+        if (status) { conditions.push(`f.status = $${paramIndex++}`); values.push(status); }
+        if (severity) { conditions.push(`f.severity = $${paramIndex++}`); values.push(severity); }
+        if (priority) { conditions.push(`f.priority = $${paramIndex++}`); values.push(priority); }
 
         if (conditions.length > 0) sql += ' WHERE ' + conditions.join(' AND ');
-        sql += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+        sql += ` ORDER BY f.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
         values.push(parseInt(limit as string), parseInt(offset as string));
 
         const result = await query(sql, values);
@@ -376,6 +384,36 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
             const msg = error instanceof Error ? error.message : String(error);
             res.status(500).json({ success: false, error: msg });
         }
+    }
+});
+
+// Tier 2: list other feedback rows in the same cluster. Used by the
+// admin detail page to show "Also reported by: X, Y, Z" — proving
+// deduplication to the developer without them having to search manually.
+router.get('/:id/cluster-siblings', requireAuth, async (req, res) => {
+    try {
+        const result = await query<{
+            id: string;
+            title: string;
+            email: string | null;
+            user_id: string | null;
+            created_at: string;
+            status: string | null;
+        }>(
+            `SELECT f2.id, f2.title, f2.email, f2.user_id, f2.created_at, f2.status
+               FROM feedback f1
+               JOIN feedback f2 ON f2.cluster_id = f1.cluster_id
+              WHERE f1.id = $1
+                AND f1.cluster_id IS NOT NULL
+                AND f2.id <> f1.id
+              ORDER BY f2.created_at DESC
+              LIMIT 50`,
+            [req.params.id],
+        );
+        res.json({ success: true, data: result.rows });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
     }
 });
 

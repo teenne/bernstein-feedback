@@ -19,13 +19,49 @@ async function getCurrentUserId(): Promise<string | null> {
     return null;
 }
 
+/**
+ * Collapse clustered feedback down to one row per cluster.
+ *
+ * The list view is a triage surface: showing three identical "Login broken"
+ * rows is exactly the noise clustering is meant to kill. So we keep the
+ * most-recent row in each cluster (which already carries the right
+ * submission_count via the FK join) and drop the rest. Rows without a
+ * cluster_id (singletons / unclustered) are passed through unchanged.
+ *
+ * Input must already be sorted by created_at DESC — that's why the caller
+ * uses `.order('created_at', { ascending: false })`. The first row seen
+ * for a cluster wins, giving us "latest submission represents the cluster".
+ */
+function dedupeClusteredRows<T extends { id: string; cluster_id?: string | null }>(rows: T[]): T[] {
+    const seenClusters = new Set<string>();
+    const out: T[] = [];
+    for (const row of rows) {
+        if (row.cluster_id) {
+            if (seenClusters.has(row.cluster_id)) continue;
+            seenClusters.add(row.cluster_id);
+        }
+        out.push(row);
+    }
+    return out;
+}
+
 export async function fetchFeedbackList(filters: { type?: string; project_id?: string; status?: string; priority?: string; limit?: number }) {
     if (useSupabaseDirectly) {
         let query = supabase!
             .from('feedback')
-            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, created_at')
+            // Tier 2: pull cluster.submission_count via the FK join so the
+            // list can show a "× N" badge next to rows that are part of a cluster.
+            // FK name is explicit because PostgREST sees two relationships between
+            // feedback and clusters (cluster_id → clusters.id, and clusters.canonical_feedback_id
+            // → feedback.id) and can't auto-pick without PGRST201.
+            //
+            // We intentionally fetch more rows than the caller asked for (×3 with a
+            // floor of 60) so that after cluster dedupe we still return ~limit items.
+            // Client-side dedupe is a stopgap; a proper fix is a SQL VIEW that
+            // surfaces one row per cluster, but that requires schema work.
+            .select('id, project_id, type, title, description, category, severity, impact, email, screen_id, page_name, user_id, tenant_id, screenshots, status, resolved_at, labels, priority, cluster_id, clusters!feedback_cluster_id_fkey(submission_count), created_at')
             .order('created_at', { ascending: false })
-            .limit(filters.limit || 100);
+            .limit(Math.max((filters.limit || 100) * 3, 60));
 
         if (filters.type) query = query.eq('type', filters.type);
         if (filters.project_id) query = query.eq('project_id', filters.project_id);
@@ -34,7 +70,13 @@ export async function fetchFeedbackList(filters: { type?: string; project_id?: s
 
         const { data, error } = await query;
         if (error) throw new Error(error.message);
-        return data || [];
+        // Flatten the joined cluster row → `cluster_submission_count` scalar,
+        // so the UI doesn't need to know about the nested shape.
+        const flattened = (data || []).map((row: any) => ({
+            ...row,
+            cluster_submission_count: row.clusters?.submission_count ?? null,
+        }));
+        return dedupeClusteredRows(flattened).slice(0, filters.limit || 100);
     }
 
     const params = new URLSearchParams();
@@ -42,10 +84,12 @@ export async function fetchFeedbackList(filters: { type?: string; project_id?: s
     if (filters.project_id) params.set('project_id', filters.project_id);
     if (filters.status) params.set('status', filters.status);
     if (filters.priority) params.set('priority', filters.priority);
-    params.set('limit', String(filters.limit || 100));
+    // Same over-fetch rationale as the Supabase path — the Node server
+    // returns raw feedback rows and we dedupe client-side.
+    params.set('limit', String(Math.max((filters.limit || 100) * 3, 60)));
 
     const json = await apiFetch(`${API_URL}/api/feedback?${params}`);
-    return json.data;
+    return dedupeClusteredRows(json.data || []).slice(0, filters.limit || 100);
 }
 
 export async function fetchFeedbackById(id: string) {
@@ -237,6 +281,41 @@ export async function updateFeedbackTriage(
     return json.data;
 }
 
+/**
+ * (Tier 2) Fetch the other feedback rows in the same cluster as a given
+ * feedback id — for the "Also reported by" panel on the detail page.
+ * Returns `[]` if the feedback has no cluster or no siblings.
+ */
+export async function fetchClusterSiblings(feedbackId: string): Promise<Array<{
+    id: string;
+    title: string;
+    email: string | null;
+    user_id: string | null;
+    created_at: string;
+    status: string | null;
+}>> {
+    if (useSupabaseDirectly) {
+        // Find the cluster_id for this feedback, then fetch all siblings.
+        const { data: self, error: e1 } = await supabase!
+            .from('feedback')
+            .select('cluster_id')
+            .eq('id', feedbackId)
+            .single();
+        if (e1 || !self?.cluster_id) return [];
+        const { data, error } = await supabase!
+            .from('feedback')
+            .select('id, title, email, user_id, created_at, status')
+            .eq('cluster_id', self.cluster_id)
+            .neq('id', feedbackId)
+            .order('created_at', { ascending: false })
+            .limit(50);
+        if (error) throw new Error(error.message);
+        return data || [];
+    }
+    const json = await apiFetch(`${API_URL}/api/feedback/${feedbackId}/cluster-siblings`);
+    return json.data || [];
+}
+
 export interface LoopHealthData {
     project_id: string | null;
     metrics: {
@@ -388,6 +467,71 @@ export async function fetchProjectUsage(projectId: string) {
 
     fetchProjectUsageInFlight.set(projectId, promise);
     return promise;
+}
+
+// ──────────────────────────────────────────────────────────────
+// BYOK AI keys (paid-plan, owner-only)
+// ──────────────────────────────────────────────────────────────
+// These always go through the Node server — Supabase-direct mode has
+// no place to decrypt safely, and the admin UI only ever displays
+// metadata (provider + last-4 hint).
+
+export interface AiKeyMetadata {
+    project_id: string;
+    provider: 'openai';
+    key_hint: string;
+    updated_at: string;
+}
+
+export interface AiKeyStatus {
+    data: AiKeyMetadata | null;
+    byok_configured: boolean;
+}
+
+export async function fetchProjectAiKey(projectId: string): Promise<AiKeyStatus> {
+    const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/ai-key`);
+    return { data: json.data ?? null, byok_configured: json.byok_configured ?? false };
+}
+
+export async function saveProjectAiKey(projectId: string, apiKey: string) {
+    const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/ai-key`, {
+        method: 'PUT',
+        body: JSON.stringify({ provider: 'openai', api_key: apiKey }),
+    });
+    if (!json.success) throw new Error(json.error || 'Failed to save key');
+    return json.data as AiKeyMetadata;
+}
+
+export async function deleteProjectAiKey(projectId: string) {
+    const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/ai-key`, {
+        method: 'DELETE',
+    });
+    if (!json.success) throw new Error(json.error || 'Failed to remove key');
+}
+
+/**
+ * Self-serve plan upgrade. Routes through POST /api/projects/:id/upgrade,
+ * which in turn checks BILLING_PROVIDER on the server and either flips the
+ * plan immediately (default) or returns 501 awaiting a real checkout flow.
+ *
+ * In Supabase-direct mode there's no server-side billing seam, so we flip
+ * the row directly — same behavior the admin Dashboard has always used.
+ */
+export async function updateProjectPlan(projectId: string, planId: string) {
+    if (useSupabaseDirectly) {
+        const { error } = await supabase!
+            .from('projects')
+            .update({ plan: planId, plan_id: planId })
+            .eq('id', projectId);
+        if (error) throw new Error(error.message);
+        return true;
+    }
+    const json = await apiFetch(`${API_URL}/api/projects/${encodeURIComponent(projectId)}/upgrade`, {
+        method: 'POST',
+        body: JSON.stringify({ plan_id: planId }),
+    });
+    if (!json.success) throw new Error(json.error || 'Plan update failed');
+    return true;
 }
 
 export async function fetchPlans() {

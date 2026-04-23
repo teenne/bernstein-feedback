@@ -1,13 +1,26 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useFeedback } from "akk-feedback";
+import { useAuth } from "../hooks/useAuth";
+import { useAdminNotifications } from "../hooks/useAdminNotifications";
 
-export function Notification() {
-  const feedback = useFeedback();
-  const notifications = feedback.notifications ?? [];
-  const unreadCount = feedback.unreadCount ?? 0;
-  const markNotificationRead = feedback.markNotificationRead ?? (() => {});
-  const markAllNotificationsRead = feedback.markAllNotificationsRead ?? (() => {});
+interface NotificationProps {
+  /** Called when a notification pointing at a different project is clicked,
+   *  so the admin app can switch its project dropdown to match. */
+  onProjectSwitch?: (projectId: string) => void;
+}
+
+export function Notification({ onProjectSwitch }: NotificationProps = {}) {
+  // Admin bell reads cross-project notifications directly, independent of the
+  // project dropdown. This deliberately doesn't go through `useFeedback()`
+  // because the embedded widget is scoped to one projectId (the dropdown
+  // value), which is wrong for the admin use case.
+  const { userId } = useAuth();
+  const {
+    notifications,
+    unreadCount,
+    markAsRead: markNotificationRead,
+    markAllRead: markAllNotificationsRead,
+  } = useAdminNotifications({ userId });
 
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -27,6 +40,12 @@ export function Notification() {
   const handleNotificationClick = (n: any) => {
     markNotificationRead(n.id);
     setShowDropdown(false);
+    // If the notification belongs to a different project than the one the
+    // admin is currently viewing, switch the dropdown first so the feedback
+    // list / detail queries scope correctly.
+    if (n.project_id && onProjectSwitch) {
+      onProjectSwitch(n.project_id);
+    }
     navigate(`/feedback/${n.feedback_id}`);
   };
 
@@ -102,9 +121,16 @@ export function Notification() {
                           {n.message}
                         </p>
                       )}
-                      <p className="text-[10px] text-gray-400 mt-1">
-                        {new Date(n.created_at).toLocaleDateString()}
-                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        {n.project_id && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-gray-300">
+                            {n.project_id}
+                          </span>
+                        )}
+                        <p className="text-[10px] text-gray-400">
+                          {new Date(n.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
                     </div>
                     <svg
                       width="14"

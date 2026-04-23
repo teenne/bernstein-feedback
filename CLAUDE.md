@@ -107,6 +107,13 @@ Additional documentation is in `docs/`:
 - `adapters.md` - Adapter usage and custom adapters
 - `theming.md` - CSS variables and dark mode
 
+Scoped CLAUDE.md files:
+- `packages/feedback/CLAUDE.md` - widget internals
+- `server/CLAUDE.md` - plan gating, billing seam, cluster worker, BYOK keys, agent API stub, ownership model. **Read this before touching plan logic, clustering, BYOK, or billing.**
+
+Deep-dive docs:
+- `docs/ai-clustering-setup.md` - credentials checklist, BYOK setup, deployment matrix, smoke test, failure modes.
+
 ## Recommended Plugins
 
 Install these Claude Code plugins for optimal development experience:

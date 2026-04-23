@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects, fetchProjectUsage, fetchLoopHealth, type LoopHealthData } from '../lib/feedbackApi';
+import { fetchFeedbackStats, fetchUserProjectIds, fetchProjects, fetchProjectUsage, fetchLoopHealth, updateProjectPlan, type LoopHealthData } from '../lib/feedbackApi';
 import { useAuth } from '../hooks/useAuth';
 import { useFeedback } from 'akk-feedback';
 import { LayoutWrapper } from '../components/LayoutWrapper';
@@ -17,6 +17,8 @@ export function StatsPage() {
     const [selectedProject, setSelectedProject] = useState('');
     const [usage, setUsage] = useState<UsageData | null>(null);
     const [health, setHealth] = useState<LoopHealthData | null>(null);
+    const [upgrading, setUpgrading] = useState(false);
+    const [upgradeError, setUpgradeError] = useState<string | null>(null);
 
     const { isAdmin } = useAuth();
     const { lastReportId } = useFeedback();
@@ -127,6 +129,54 @@ export function StatsPage() {
                     })}
                 </div>
 
+                {/* Upgrade banner — shown when the selected project has hit
+                    its monthly limit. Spec calls for both an email AND an
+                    in-dashboard prompt; the email is queued by the trigger,
+                    this card is the dashboard side. */}
+                {usage && usage.percentage_used >= 100 && usage.plan !== 'paid' && usage.plan !== 'pro' && (() => {
+                    const targetProject = selectedProject || userProjects[0];
+                    const onUpgrade = async () => {
+                        if (!targetProject) return;
+                        setUpgradeError(null);
+                        setUpgrading(true);
+                        try {
+                            await updateProjectPlan(targetProject, 'paid');
+                            const refreshed = await fetchProjectUsage(targetProject);
+                            setUsage(refreshed);
+                        } catch (err) {
+                            setUpgradeError(err instanceof Error ? err.message : 'Upgrade failed');
+                        } finally {
+                            setUpgrading(false);
+                        }
+                    };
+                    return (
+                        <GlassCard className="!p-5 border-2 border-red-300 dark:border-red-500/40 bg-red-50/50 dark:bg-red-500/5">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div>
+                                    <p className="text-sm font-bold text-red-700 dark:text-red-400">
+                                        Monthly feedback limit reached
+                                    </p>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                        New submissions are paused for {targetProject}. Users see a limit
+                                        notice in the widget. Upgrade to resume collection.
+                                    </p>
+                                    {upgradeError && (
+                                        <p className="text-xs text-red-600 dark:text-red-400 mt-2">{upgradeError}</p>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={onUpgrade}
+                                    disabled={upgrading || !targetProject}
+                                    className="shrink-0 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-sm font-bold rounded-lg shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                                >
+                                    {upgrading ? 'Upgrading…' : 'Upgrade to Paid'}
+                                </button>
+                            </div>
+                        </GlassCard>
+                    );
+                })()}
+
                 {/* Usage Meter */}
                 {usage && (
                     <GlassCard className="!p-5">
@@ -136,11 +186,11 @@ export function StatsPage() {
                                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{usage.month}</p>
                             </div>
                             <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
-                                usage.plan === 'pro'
+                                usage.plan === 'paid' || usage.plan === 'pro'
                                     ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
                                     : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
                             }`}>
-                                {usage.plan === 'pro' ? 'Pro' : 'Free'} Plan
+                                {usage.plan === 'paid' || usage.plan === 'pro' ? 'Paid' : 'Free'} Plan
                             </span>
                         </div>
                         <div className="flex items-end gap-3 mb-2">

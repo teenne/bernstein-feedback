@@ -212,7 +212,24 @@ export function FeedbackListPage() {
                                                 </span>
                                             </td>
                                             <td className="px-5 py-3.5">
-                                                <p className="font-medium text-gray-900 dark:text-gray-100">{item.title}</p>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <p className="font-medium text-gray-900 dark:text-gray-100">{item.title}</p>
+                                                    {/* Tier 2: cluster-count badge. Shown when the item belongs
+                                                         to a cluster of ≥2 submissions (the worker groups duplicates). */}
+                                                    {(item.cluster_submission_count ?? 0) > 1 && (
+                                                        <span
+                                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold rounded-md bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300"
+                                                            title={`Grouped with ${item.cluster_submission_count! - 1} similar ${item.cluster_submission_count! - 1 === 1 ? 'report' : 'reports'}`}
+                                                        >
+                                                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                                                <circle cx="8" cy="8" r="3" />
+                                                                <circle cx="16" cy="16" r="3" />
+                                                                <path d="M10 10l4 4" />
+                                                            </svg>
+                                                            ×{item.cluster_submission_count}
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 {item.description && (
                                                     <p className="text-gray-400 dark:text-gray-500 text-xs mt-0.5 truncate max-w-md">{item.description}</p>
                                                 )}

@@ -29,6 +29,10 @@ export interface FeedbackItem {
     // Triage fields (P3)
     labels?: string[] | null;
     priority?: FeedbackPriority | null;
+    // Cluster membership (Tier 2)
+    cluster_id?: string | null;
+    /** Populated by the list endpoint via JOIN for badge rendering */
+    cluster_submission_count?: number | null;
     created_at: string;
 }
 

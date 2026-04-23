@@ -6,7 +6,7 @@ import {
   useRef,
   useEffect,
   type ReactNode,
-} from 'react';
+} from "react";
 import type {
   FeedbackConfig,
   FeedbackEvent,
@@ -17,9 +17,9 @@ import type {
   Breadcrumb,
   PlanStatus,
   Notification,
-} from './schemas';
-import { useNotifications } from './hooks/useNotifications';
-import { redactSecrets, redactUrl, getElementDescriptor } from './utils/redact';
+} from "./schemas";
+import { useNotifications } from "./hooks/useNotifications";
+import { redactSecrets, redactUrl, getElementDescriptor } from "./utils/redact";
 
 interface HighlightedElement {
   selector: string;
@@ -29,7 +29,7 @@ interface HighlightedElement {
 }
 
 interface Toast {
-  type: 'success' | 'error';
+  type: "success" | "error";
   message: string;
   feedbackId?: string;
 }
@@ -47,10 +47,14 @@ interface FeedbackContextValue {
   /** Quick API to report a bug with prefilled text */
   reportBug: (options?: { title?: string; description?: string }) => void;
   close: () => void;
-  submit: (formState: FeedbackFormState, screenshots?: string[], highlightedElement?: HighlightedElement) => Promise<{ success: boolean; reportId?: string }>;
+  submit: (
+    formState: FeedbackFormState,
+    screenshots?: string[],
+    highlightedElement?: HighlightedElement,
+  ) => Promise<{ success: boolean; reportId?: string }>;
   captureContext: () => CapturedContext;
   /** Track a custom breadcrumb */
-  addBreadcrumb: (breadcrumb: Omit<Breadcrumb, 'timestamp'>) => void;
+  addBreadcrumb: (breadcrumb: Omit<Breadcrumb, "timestamp">) => void;
   /** Update screen identity for navigation tracking */
   setScreen: (screen: { screenId?: string; pageName?: string }) => void;
   initialFormState: Partial<FeedbackFormState>;
@@ -81,14 +85,16 @@ const FeedbackContext = createContext<FeedbackContextValue | null>(null);
 export function useFeedback() {
   const context = useContext(FeedbackContext);
   if (!context) {
-    throw new Error('useFeedback must be used within a FeedbackProvider');
+    throw new Error("useFeedback must be used within a FeedbackProvider");
   }
   return context;
 }
 
 interface FeedbackProviderProps {
   children: ReactNode;
-  config: Omit<FeedbackConfig, 'adapter'> & { adapter: FeedbackConfig['adapter'] };
+  config: Omit<FeedbackConfig, "adapter"> & {
+    adapter: FeedbackConfig["adapter"];
+  };
 }
 
 /**
@@ -100,7 +106,9 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [lastReportId, setLastReportId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [initialFormState, setInitialFormState] = useState<Partial<FeedbackFormState>>({});
+  const [initialFormState, setInitialFormState] = useState<
+    Partial<FeedbackFormState>
+  >({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -109,11 +117,19 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [isLimitReached, setIsLimitReached] = useState(false);
 
   // Notifications
-  const { notifications, unreadCount, markAsRead: markNotificationRead, markAllRead: markAllNotificationsRead } = useNotifications(config);
+  const {
+    notifications,
+    unreadCount,
+    markAsRead: markNotificationRead,
+    markAllRead: markAllNotificationsRead,
+  } = useNotifications(config);
   const [showNotifications, setShowNotifications] = useState(false);
 
   // Dynamic screen identity state
-  const [screenIdentity, setScreenIdentity] = useState<{ screenId?: string; pageName?: string }>({
+  const [screenIdentity, setScreenIdentity] = useState<{
+    screenId?: string;
+    pageName?: string;
+  }>({
     screenId: config.screenId,
     pageName: config.pageName,
   });
@@ -132,13 +148,18 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     const originalError = console.error;
     console.error = (...args) => {
       const error: ConsoleError = {
-        message: args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '),
+        message: args
+          .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+          .join(" "),
         timestamp: new Date().toISOString(),
       };
       if (args[0] instanceof Error) {
         error.stack = args[0].stack;
       }
-      consoleErrors.current = [...consoleErrors.current.slice(-(maxConsoleErrors - 1)), error];
+      consoleErrors.current = [
+        ...consoleErrors.current.slice(-(maxConsoleErrors - 1)),
+        error,
+      ];
       originalError.apply(console, args);
     };
 
@@ -151,8 +172,13 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   useEffect(() => {
     const originalFetch = window.fetch;
     window.fetch = async (input, init) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      const method = init?.method || 'GET';
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      const method = init?.method || "GET";
 
       // Extract endpoint path only (no query params, no host)
       const getEndpoint = (fullUrl: string): string => {
@@ -160,7 +186,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           const parsed = new URL(fullUrl, window.location.origin);
           return parsed.pathname; // Path only, no query string
         } catch {
-          return fullUrl.split('?')[0]; // Fallback: strip query params
+          return fullUrl.split("?")[0]; // Fallback: strip query params
         }
       };
 
@@ -176,7 +202,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
             status: response.status,
             method,
             duration,
-            requestId: response.headers.get('x-request-id') || undefined,
+            requestId: response.headers.get("x-request-id") || undefined,
             timestamp: new Date().toISOString(),
           };
           networkErrors.current = [
@@ -194,7 +220,10 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           duration,
           timestamp: new Date().toISOString(),
         };
-        networkErrors.current = [...networkErrors.current.slice(-(maxNetworkErrors - 1)), error];
+        networkErrors.current = [
+          ...networkErrors.current.slice(-(maxNetworkErrors - 1)),
+          error,
+        ];
         throw err;
       }
     };
@@ -209,30 +238,37 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       const breadcrumb: Breadcrumb = {
-        type: 'click',
+        type: "click",
         target: getElementDescriptor(target),
         timestamp: new Date().toISOString(),
       };
-      breadcrumbs.current = [...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)), breadcrumb];
+      breadcrumbs.current = [
+        ...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)),
+        breadcrumb,
+      ];
     };
 
-    document.addEventListener('click', handleClick, { capture: true });
-    return () => document.removeEventListener('click', handleClick, { capture: true });
+    document.addEventListener("click", handleClick, { capture: true });
+    return () =>
+      document.removeEventListener("click", handleClick, { capture: true });
   }, [maxBreadcrumbs]);
 
   // Navigation tracking
   useEffect(() => {
     const handleNavigation = () => {
       const breadcrumb: Breadcrumb = {
-        type: 'navigation',
+        type: "navigation",
         target: window.location.pathname,
         timestamp: new Date().toISOString(),
       };
-      breadcrumbs.current = [...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)), breadcrumb];
+      breadcrumbs.current = [
+        ...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)),
+        breadcrumb,
+      ];
     };
 
-    window.addEventListener('popstate', handleNavigation);
-    return () => window.removeEventListener('popstate', handleNavigation);
+    window.addEventListener("popstate", handleNavigation);
+    return () => window.removeEventListener("popstate", handleNavigation);
   }, [maxBreadcrumbs]);
 
   // Plan status polling — check on mount, when dialog opens, and every 5 minutes
@@ -268,7 +304,7 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       // it's actually routing submissions to Supabase. Hitting baseUrl
       // first sent plan-status to localhost in production while feedback
       // was going to Supabase — the bug this ordering fixes.
-      if (!resolved && typeof adapterAny?.getPlanStatus === 'function') {
+      if (!resolved && typeof adapterAny?.getPlanStatus === "function") {
         try {
           const status = await adapterAny.getPlanStatus(config.projectId);
           if (status) {
@@ -284,12 +320,16 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       // Path 3: baseUrl-derived HTTP fallback for local-only deployments
       // where the adapter has no getPlanStatus (plain http adapter).
       if (!resolved) {
-        const baseUrl = adapterAny?.baseUrl || (adapterAny?.endpoint
-          ? adapterAny.endpoint.replace(/\/api\/feedback\/?$/, '')
-          : null);
+        const baseUrl =
+          adapterAny?.baseUrl ||
+          (adapterAny?.endpoint
+            ? adapterAny.endpoint.replace(/\/api\/feedback\/?$/, "")
+            : null);
         if (baseUrl) {
           try {
-            const response = await fetch(`${baseUrl}/api/projects/${config.projectId}/plan-status`);
+            const response = await fetch(
+              `${baseUrl}/api/projects/${config.projectId}/plan-status`,
+            );
             if (response.ok) {
               const json = await response.json();
               if (json.success && json.data) {
@@ -311,7 +351,10 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     fetchPlanStatusRef.current?.();
 
     // Re-check every 5 minutes
-    const interval = setInterval(() => fetchPlanStatusRef.current?.(), 5 * 60 * 1000);
+    const interval = setInterval(
+      () => fetchPlanStatusRef.current?.(),
+      5 * 60 * 1000,
+    );
     return () => clearInterval(interval);
   }, [config.planCheckEndpoint, config.projectId, config.adapter]);
 
@@ -322,14 +365,17 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   }, [isOpen]);
 
   const addBreadcrumb = useCallback(
-    (breadcrumb: Omit<Breadcrumb, 'timestamp'>) => {
+    (breadcrumb: Omit<Breadcrumb, "timestamp">) => {
       const fullBreadcrumb: Breadcrumb = {
         ...breadcrumb,
         timestamp: new Date().toISOString(),
       };
-      breadcrumbs.current = [...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)), fullBreadcrumb];
+      breadcrumbs.current = [
+        ...breadcrumbs.current.slice(-(maxBreadcrumbs - 1)),
+        fullBreadcrumb,
+      ];
     },
-    [maxBreadcrumbs]
+    [maxBreadcrumbs],
   );
 
   const dismissToast = useCallback(() => {
@@ -340,22 +386,25 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     }
   }, []);
 
-  const showToast = useCallback((newToast: Toast) => {
-    // Clear any existing timeout
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
+  const showToast = useCallback(
+    (newToast: Toast) => {
+      // Clear any existing timeout
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
 
-    setToast(newToast);
+      setToast(newToast);
 
-    const duration = config.toastDuration ?? 5000;
-    if (duration > 0) {
-      toastTimeoutRef.current = setTimeout(() => {
-        setToast(null);
-        toastTimeoutRef.current = null;
-      }, duration);
-    }
-  }, [config.toastDuration]);
+      const duration = config.toastDuration ?? 5000;
+      if (duration > 0) {
+        toastTimeoutRef.current = setTimeout(() => {
+          setToast(null);
+          toastTimeoutRef.current = null;
+        }, duration);
+      }
+    },
+    [config.toastDuration],
+  );
 
   const captureContext = useCallback((): CapturedContext => {
     return {
@@ -388,30 +437,51 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
       networkErrors: networkErrors.current.slice(-maxNetworkErrors),
       breadcrumbs: breadcrumbs.current.slice(-maxBreadcrumbs),
     };
-  }, [config.appVersion, config.buildSha, config.componentVersion, config.env, config.pageName, config.screenId, config.redact, screenIdentity, maxConsoleErrors, maxNetworkErrors, maxBreadcrumbs]);
+  }, [
+    config.appVersion,
+    config.buildSha,
+    config.componentVersion,
+    config.env,
+    config.pageName,
+    config.screenId,
+    config.redact,
+    screenIdentity,
+    maxConsoleErrors,
+    maxNetworkErrors,
+    maxBreadcrumbs,
+  ]);
 
-  const openFeedback = useCallback((initialState?: Partial<FeedbackFormState>) => {
-    setInitialFormState({ type: 'feedback', ...initialState });
-    setSubmitError(null);
-    setIsOpen(true);
-  }, []);
+  const openFeedback = useCallback(
+    (initialState?: Partial<FeedbackFormState>) => {
+      setInitialFormState({ type: "feedback", ...initialState });
+      setSubmitError(null);
+      setIsOpen(true);
+    },
+    [],
+  );
 
-  const openBugReport = useCallback((initialState?: Partial<FeedbackFormState>) => {
-    setInitialFormState({ type: 'bug_report', ...initialState });
-    setSubmitError(null);
-    setIsOpen(true);
-  }, []);
+  const openBugReport = useCallback(
+    (initialState?: Partial<FeedbackFormState>) => {
+      setInitialFormState({ type: "bug_report", ...initialState });
+      setSubmitError(null);
+      setIsOpen(true);
+    },
+    [],
+  );
 
   // Quick API for programmatic bug reporting
-  const reportBug = useCallback((options?: { title?: string; description?: string }) => {
-    setInitialFormState({
-      type: 'bug_report',
-      title: options?.title || '',
-      description: options?.description || '',
-    });
-    setSubmitError(null);
-    setIsOpen(true);
-  }, []);
+  const reportBug = useCallback(
+    (options?: { title?: string; description?: string }) => {
+      setInitialFormState({
+        type: "bug_report",
+        title: options?.title || "",
+        description: options?.description || "",
+      });
+      setSubmitError(null);
+      setIsOpen(true);
+    },
+    [],
+  );
 
   const close = useCallback(() => {
     setIsOpen(false);
@@ -421,21 +491,26 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   }, []);
 
   const submit = useCallback(
-    async (formState: FeedbackFormState, screenshots?: string[], highlightedElement?: {
-      selector: string;
-      boundingBox: { x: number; y: number; width: number; height: number };
-      tagName: string;
-      text?: string;
-    }): Promise<{ success: boolean; reportId?: string }> => {
+    async (
+      formState: FeedbackFormState,
+      screenshots?: string[],
+      highlightedElement?: {
+        selector: string;
+        boundingBox: { x: number; y: number; width: number; height: number };
+        tagName: string;
+        text?: string;
+      },
+    ): Promise<{ success: boolean; reportId?: string }> => {
       setIsSubmitting(true);
       setSubmitError(null);
 
       try {
         // Validate project_id before submitting
         if (!config.projectId) {
-          const msg = 'No project selected. Please create or select a project before submitting feedback.';
+          const msg =
+            "No project selected. Please create or select a project before submitting feedback.";
           setSubmitError(msg);
-          showToast({ type: 'error', message: msg });
+          showToast({ type: "error", message: msg });
           return { success: false };
         }
 
@@ -444,11 +519,21 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         const context = {
           ...fullContext,
           // Respect consent toggles
-          consoleErrors: formState.includeTechnicalDetails ? fullContext.consoleErrors : [],
-          networkErrors: formState.includeTechnicalDetails ? fullContext.networkErrors : [],
-          breadcrumbs: formState.includeRecentSteps ? fullContext.breadcrumbs : [],
-          userAgent: formState.includeTechnicalDetails ? fullContext.userAgent : '',
-          viewport: formState.includeTechnicalDetails ? fullContext.viewport : { width: 0, height: 0 },
+          consoleErrors: formState.includeTechnicalDetails
+            ? fullContext.consoleErrors
+            : [],
+          networkErrors: formState.includeTechnicalDetails
+            ? fullContext.networkErrors
+            : [],
+          breadcrumbs: formState.includeRecentSteps
+            ? fullContext.breadcrumbs
+            : [],
+          userAgent: formState.includeTechnicalDetails
+            ? fullContext.userAgent
+            : "",
+          viewport: formState.includeTechnicalDetails
+            ? fullContext.viewport
+            : { width: 0, height: 0 },
         };
 
         // (Tier 1) Capture session metadata from the analytics provider.
@@ -464,8 +549,11 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         if (config.sessionProvider) {
           try {
             const sid = config.sessionProvider.getSessionId() ?? undefined;
-            const props = config.sessionProvider.getUserProperties() ?? undefined;
-            const replay = sid ? (config.sessionProvider.getReplayUrl(sid) ?? undefined) : undefined;
+            const props =
+              config.sessionProvider.getUserProperties() ?? undefined;
+            const replay = sid
+              ? (config.sessionProvider.getReplayUrl(sid) ?? undefined)
+              : undefined;
             sessionMeta = {
               session_id: sid || undefined,
               session_provider: sid ? config.sessionProvider.name : undefined,
@@ -473,7 +561,10 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
               user_properties: props || undefined,
             };
           } catch (err) {
-            console.warn('[Feedback] sessionProvider threw — skipping session metadata:', err);
+            console.warn(
+              "[Feedback] sessionProvider threw — skipping session metadata:",
+              err,
+            );
           }
         }
 
@@ -487,15 +578,19 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           category: formState.category,
           severity: formState.severity,
           impact: formState.impact,
-          email: formState.includeEmail ? formState.email : config.userEmail || undefined,
+          email: formState.includeEmail
+            ? formState.email
+            : config.userEmail || undefined,
           context,
           screenshots: formState.includeScreenshot ? screenshots : undefined,
-          highlighted_element: highlightedElement ? {
-            selector: highlightedElement.selector,
-            bounding_box: highlightedElement.boundingBox,
-            tag_name: highlightedElement.tagName,
-            text: highlightedElement.text,
-          } : undefined,
+          highlighted_element: highlightedElement
+            ? {
+                selector: highlightedElement.selector,
+                bounding_box: highlightedElement.boundingBox,
+                tag_name: highlightedElement.tagName,
+                text: highlightedElement.text,
+              }
+            : undefined,
           // User identity (minimal)
           user_id: config.userId,
           tenant_id: config.tenantId,
@@ -508,13 +603,22 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         const result = await config.adapter.submit(event);
 
         // Handle server-side limit_reached response
-        if (!result.success && result.error === 'limit_reached') {
+        if (!result.success && result.error === "limit_reached") {
           setIsLimitReached(true);
-          setPlanStatus(prev => prev ? { ...prev, can_submit: false } : {
-            can_submit: false, tickets_used: 0, tickets_limit: 50, plan: 'free',
-            message: 'Monthly feedback limit reached.',
-          });
-          setSubmitError('This project has reached its monthly feedback limit.');
+          setPlanStatus((prev) =>
+            prev
+              ? { ...prev, can_submit: false }
+              : {
+                  can_submit: false,
+                  tickets_used: 0,
+                  tickets_limit: 50,
+                  plan: "free",
+                  message: "Monthly feedback limit reached.",
+                },
+          );
+          setSubmitError(
+            "This project has reached its monthly feedback limit.",
+          );
           return { success: false };
         }
 
@@ -522,24 +626,25 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
           setLastReportId(result.id || null);
           close();
           showToast({
-            type: 'success',
-            message: 'Thanks for your feedback\!',
+            type: "success",
+            message: "Thanks for your feedback\!",
             feedbackId: result.id,
           });
           return { success: true, reportId: result.id };
         } else {
-          setSubmitError(result.error || 'Failed to submit feedback');
+          setSubmitError(result.error || "Failed to submit feedback");
           showToast({
-            type: 'error',
-            message: result.error || 'Failed to submit feedback',
+            type: "error",
+            message: result.error || "Failed to submit feedback",
           });
           return { success: false };
         }
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
+        const errorMessage =
+          err instanceof Error ? err.message : "An unexpected error occurred";
         setSubmitError(errorMessage);
         showToast({
-          type: 'error',
+          type: "error",
           message: errorMessage,
         });
         return { success: false };
@@ -547,12 +652,15 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
         setIsSubmitting(false);
       }
     },
-    [config, captureContext, close, showToast]
+    [config, captureContext, close, showToast],
   );
 
-  const setScreen = useCallback((screen: { screenId?: string; pageName?: string }) => {
-    setScreenIdentity(prev => ({ ...prev, ...screen }));
-  }, []);
+  const setScreen = useCallback(
+    (screen: { screenId?: string; pageName?: string }) => {
+      setScreenIdentity((prev) => ({ ...prev, ...screen }));
+    },
+    [],
+  );
 
   const value: FeedbackContextValue = {
     config: config as FeedbackConfig,
@@ -581,7 +689,11 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     setShowNotifications,
   };
 
-  return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
+  return (
+    <FeedbackContext.Provider value={value}>
+      {children}
+    </FeedbackContext.Provider>
+  );
 }
 
 // Utility functions (redactSecrets, redactUrl, getElementDescriptor) are

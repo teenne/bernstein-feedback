@@ -75,6 +75,7 @@ export interface Feedback {
     resolved_at: string | null;
     resolved_by: string | null;
     resolution_note: string | null;
+    agent_notes: Array<{ at: string; author: string; note: string }>;
     created_at: string;
 }
 

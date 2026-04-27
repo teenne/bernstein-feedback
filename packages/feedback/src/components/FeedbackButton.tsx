@@ -31,13 +31,13 @@ export function FeedbackButton({
   showTooltip = true,
   className = '',
 }: FeedbackButtonProps) {
-  const { openFeedback } = useFeedback();
+  const { openFeedback, unreadCount } = useFeedback();
 
   const button = (
     <button
       onClick={() => openFeedback()}
       className={`bf-fixed ${positionClasses[position]} bf-flex bf-items-center bf-gap-2 bf-px-4 bf-py-2.5 bf-bg-feedback-primary bf-text-white bf-rounded-full bf-shadow-lg hover:bf-bg-feedback-primary-hover bf-transition-all hover:bf-shadow-xl bf-z-[9990] focus:bf-outline-none focus-visible:bf-ring-2 focus-visible:bf-ring-offset-2 focus-visible:bf-ring-feedback-primary ${className}`}
-      aria-label="Send feedback"
+      aria-label={unreadCount > 0 ? `Send feedback (${unreadCount} update${unreadCount > 1 ? 's' : ''})` : 'Send feedback'}
     >
       <svg
         width="18"
@@ -53,6 +53,15 @@ export function FeedbackButton({
         <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
       </svg>
       <span className="bf-text-sm bf-font-medium">{label}</span>
+      {unreadCount > 0 && (
+        <span
+          style={{ position: 'absolute', top: '-7px', right: '-7px' }}
+          className="bf-min-w-[18px] bf-h-[18px] bf-px-1 bf-flex bf-items-center bf-justify-center bf-rounded-full bf-bg-red-500 bf-text-white bf-text-[10px] bf-font-bold bf-leading-none bf-shadow-sm bf-animate-pulse"
+          aria-hidden="true"
+        >
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      )}
     </button>
   );
 
@@ -86,7 +95,7 @@ export function FeedbackIconButton({
   position = 'bottom-right',
   className = '',
 }: Pick<FeedbackButtonProps, 'position' | 'className'>) {
-  const { openFeedback } = useFeedback();
+  const { openFeedback, unreadCount } = useFeedback();
 
   return (
     <Tooltip.Provider delayDuration={300}>
@@ -95,7 +104,7 @@ export function FeedbackIconButton({
           <button
             onClick={() => openFeedback()}
             className={`bf-fixed ${positionClasses[position]} bf-flex bf-items-center bf-justify-center bf-w-12 bf-h-12 bf-bg-feedback-primary bf-text-white bf-rounded-full bf-shadow-lg hover:bf-bg-feedback-primary-hover bf-transition-all hover:bf-shadow-xl bf-z-[9990] focus:bf-outline-none focus-visible:bf-ring-2 focus-visible:bf-ring-offset-2 focus-visible:bf-ring-feedback-primary ${className}`}
-            aria-label="Send feedback"
+            aria-label={unreadCount > 0 ? `Send feedback (${unreadCount} update${unreadCount > 1 ? 's' : ''})` : 'Send feedback'}
           >
             <svg
               width="24"
@@ -109,6 +118,15 @@ export function FeedbackIconButton({
             >
               <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
             </svg>
+            {unreadCount > 0 && (
+              <span
+                style={{ position: 'absolute', top: '-7px', right: '-7px' }}
+                className="bf-min-w-[18px] bf-h-[18px] bf-px-1 bf-flex bf-items-center bf-justify-center bf-rounded-full bf-bg-red-500 bf-text-white bf-text-[10px] bf-font-bold bf-leading-none bf-shadow-sm bf-animate-pulse"
+                aria-hidden="true"
+              >
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </button>
         </Tooltip.Trigger>
         <Tooltip.Portal>

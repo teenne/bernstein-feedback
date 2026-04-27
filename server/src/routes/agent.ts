@@ -72,100 +72,136 @@ router.get('/:projectId/backlog', async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
         const offset = Math.max(0, parseInt(String(req.query.offset ?? '0'), 10) || 0);
 
-        const conditions: string[] = ['c.project_id = $1'];
-        const values: any[] = [project_id];
+        // Shared param array: $1=project_id, [$2=type if present], then $N=limit, $M=offset.
+        const params: any[] = [project_id];
         let i = 2;
-        if (!includeResolved) conditions.push(`c.resolved_at IS NULL`);
-        if (type) { conditions.push(`c.feedback_type = $${i++}`); values.push(type); }
 
-        const clustersSql = `
-            SELECT
-              c.id AS cluster_id,
-              c.feedback_type,
-              c.title,
-              c.submission_count,
-              c.first_seen_at,
-              c.last_seen_at,
-              c.resolved_at,
-              c.priority_score,
-              f.id AS canonical_id,
-              f.description AS canonical_description,
-              f.url AS canonical_url,
-              f.route AS canonical_route,
-              f.page_name AS canonical_page_name,
-              f.severity,
-              f.priority,
-              f.status AS canonical_status,
-              f.labels,
-              f.session_id,
-              f.session_provider,
-              f.session_replay_url,
-              f.user_properties
-            FROM clusters c
-            LEFT JOIN feedback f ON f.id = c.canonical_feedback_id
-            WHERE ${conditions.join(' AND ')}
-            ORDER BY c.priority_score DESC, c.last_seen_at DESC
+        const clusterConds = ['c.project_id = $1'];
+        const standaloneConds = ['f.project_id = $1', 'f.cluster_id IS NULL'];
+        if (!includeResolved) {
+            clusterConds.push('c.resolved_at IS NULL');
+            standaloneConds.push(`f.status NOT IN ('resolved', 'closed')`);
+        }
+        if (type) {
+            clusterConds.push(`c.feedback_type = $${i}`);
+            standaloneConds.push(`f.type = $${i}`);
+            params.push(type);
+            i++;
+        }
+        const limitIdx = i++;
+        const offsetIdx = i++;
+        params.push(limit, offset);
+
+        const cols = `
+              cluster_id,
+              feedback_type,
+              title,
+              submission_count,
+              first_seen_at,
+              last_seen_at,
+              resolved_at,
+              priority_score,
+              canonical_id,
+              canonical_description,
+              canonical_url,
+              canonical_route,
+              canonical_page_name,
+              severity,
+              priority,
+              canonical_status,
+              labels,
+              session_id,
+              session_provider,
+              session_replay_url,
+              user_properties,
+              canonical_network_errors`;
+
+        // UNION ALL with ORDER BY + LIMIT/OFFSET pushed to the DB — previously
+        // fetched all rows unbounded, merged and sorted in Node memory.
+        const dataSql = `
+            SELECT ${cols} FROM (
+                SELECT
+                  c.id AS cluster_id,
+                  c.feedback_type,
+                  c.title,
+                  c.submission_count,
+                  c.first_seen_at,
+                  c.last_seen_at,
+                  c.resolved_at,
+                  COALESCE(c.priority_score::float, 0) AS priority_score,
+                  f.id AS canonical_id,
+                  f.description AS canonical_description,
+                  f.url AS canonical_url,
+                  f.route AS canonical_route,
+                  f.page_name AS canonical_page_name,
+                  f.severity,
+                  f.priority,
+                  f.status AS canonical_status,
+                  f.labels,
+                  f.session_id,
+                  f.session_provider,
+                  f.session_replay_url,
+                  f.user_properties,
+                  fc.network_errors AS canonical_network_errors
+                FROM clusters c
+                LEFT JOIN feedback f ON f.id = c.canonical_feedback_id
+                LEFT JOIN feedback_context fc ON fc.feedback_id = c.canonical_feedback_id
+                WHERE ${clusterConds.join(' AND ')}
+
+                UNION ALL
+
+                SELECT
+                  NULL::UUID AS cluster_id,
+                  f.type AS feedback_type,
+                  f.title,
+                  1 AS submission_count,
+                  f.created_at AS first_seen_at,
+                  f.created_at AS last_seen_at,
+                  NULL::TIMESTAMPTZ AS resolved_at,
+                  0::float AS priority_score,
+                  f.id AS canonical_id,
+                  f.description AS canonical_description,
+                  f.url AS canonical_url,
+                  f.route AS canonical_route,
+                  f.page_name AS canonical_page_name,
+                  f.severity,
+                  f.priority,
+                  f.status AS canonical_status,
+                  f.labels,
+                  f.session_id,
+                  f.session_provider,
+                  f.session_replay_url,
+                  f.user_properties,
+                  fc.network_errors AS canonical_network_errors
+                FROM feedback f
+                LEFT JOIN feedback_context fc ON fc.feedback_id = f.id
+                WHERE ${standaloneConds.join(' AND ')}
+            ) combined
+            ORDER BY priority_score DESC, last_seen_at DESC
+            LIMIT $${limitIdx} OFFSET $${offsetIdx}
         `;
 
-        // Standalone (unclustered) feedback — not yet grouped by the worker.
-        // Treat each row as a single-member "cluster" for the agent.
-        const standaloneConditions: string[] = [
-            'f.project_id = $1',
-            'f.cluster_id IS NULL',
-        ];
-        const standaloneValues: any[] = [project_id];
-        let si = 2;
-        if (!includeResolved) standaloneConditions.push(`f.status NOT IN ('resolved', 'closed')`);
-        if (type) { standaloneConditions.push(`f.type = $${si++}`); standaloneValues.push(type); }
-
-        const standaloneSql = `
-            SELECT
-              NULL::UUID AS cluster_id,
-              f.type AS feedback_type,
-              f.title,
-              1 AS submission_count,
-              f.created_at AS first_seen_at,
-              f.created_at AS last_seen_at,
-              NULL::TIMESTAMPTZ AS resolved_at,
-              0 AS priority_score,
-              f.id AS canonical_id,
-              f.description AS canonical_description,
-              f.url AS canonical_url,
-              f.route AS canonical_route,
-              f.page_name AS canonical_page_name,
-              f.severity,
-              f.priority,
-              f.status AS canonical_status,
-              f.labels,
-              f.session_id,
-              f.session_provider,
-              f.session_replay_url,
-              f.user_properties
-            FROM feedback f
-            WHERE ${standaloneConditions.join(' AND ')}
+        // COUNT uses the same WHERE params but without LIMIT/OFFSET.
+        const countParams = params.slice(0, -2);
+        const countSql = `
+            SELECT COUNT(*) AS total FROM (
+                SELECT c.id FROM clusters c WHERE ${clusterConds.join(' AND ')}
+                UNION ALL
+                SELECT f.id FROM feedback f WHERE ${standaloneConds.join(' AND ')}
+            ) sub
         `;
 
-        const [clustersResult, standaloneResult] = await Promise.all([
-            query<any>(clustersSql, values),
-            query<any>(standaloneSql, standaloneValues),
+        const [dataResult, countResult] = await Promise.all([
+            query<any>(dataSql, params),
+            query<{ total: string }>(countSql, countParams),
         ]);
-
-        // Merge, sort by priority (clusters first by score, then standalone by recency)
-        const merged = [...clustersResult.rows, ...standaloneResult.rows].sort((a, b) => {
-            const ap = Number(a.priority_score) || 0;
-            const bp = Number(b.priority_score) || 0;
-            if (ap !== bp) return bp - ap;
-            return String(b.last_seen_at).localeCompare(String(a.last_seen_at));
-        });
-
-        const paginated = merged.slice(offset, offset + limit);
 
         res.json({
             success: true,
-            total: merged.length,
+            total: parseInt(countResult.rows[0]?.total || '0'),
             limit,
             offset,
-            data: paginated,
+            data: dataResult.rows,
         });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage, fetchClusterSiblings, fetchClusterDetail, approveClusterFix, type ClusterDetail } from '../lib/feedbackApi';
+import { fetchFeedbackById, updateFeedbackStatus, updateFeedbackTriage, fetchClusterSiblings, fetchClusterDetail, approveClusterFix, splitFromCluster, askAgent, type ClusterDetail } from '../lib/feedbackApi';
 import { LayoutWrapper } from '../components/LayoutWrapper';
 import { GlassCard } from '../components/GlassCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -39,6 +39,41 @@ export function FeedbackDetailPage() {
     // an agent-proposed diff attached.
     const [cluster, setCluster] = useState<ClusterDetail | null>(null);
     const [approvingFix, setApprovingFix] = useState(false);
+    const [askingAgent, setAskingAgent] = useState(false);
+    const [askAgentMessage, setAskAgentMessage] = useState<string | null>(null);
+
+    const handleAskAgent = async () => {
+        if (!cluster || askingAgent) return;
+        setAskingAgent(true);
+        setAskAgentMessage(null);
+        try {
+            await askAgent(cluster.project_id, cluster.id);
+            setAskAgentMessage('Agent notified. Refresh in a moment to see the proposed fix.');
+            // Poll once after 5s in case the agent is fast
+            setTimeout(async () => {
+                try {
+                    const fresh = await fetchClusterDetail(cluster.id);
+                    if (fresh) setCluster(fresh);
+                } catch { /* ignore */ }
+            }, 5000);
+        } catch (err: any) {
+            setAskAgentMessage(err.message || 'Failed to notify agent');
+        }
+        setAskingAgent(false);
+    };
+
+    const handleSplitFromCluster = async () => {
+        if (!item) return;
+        if (!confirm('Detach this feedback from its cluster? It will become a standalone ticket.')) return;
+        try {
+            await splitFromCluster(item.id);
+            setItem(prev => prev ? { ...prev, cluster_id: null } : null);
+            setClusterSiblings([]);
+            setCluster(null);
+        } catch (err: any) {
+            setError(err.message || 'Failed to detach');
+        }
+    };
 
     const handleApproveFix = async () => {
         if (!cluster || approvingFix) return;
@@ -305,6 +340,38 @@ export function FeedbackDetailPage() {
                 </GlassCard>
             )}
 
+            {/* Agent Investigation — read-only list of notes posted via the
+                Agent API (POST /api/v1/agent/:projectId/feedback/:id/note).
+                Hidden when no agent has left a note so it doesn't clutter
+                the layout. No compose box in the UI — agents post via the
+                X-API-Key-auth'd API, verifiable with curl + SQL. */}
+            {Array.isArray(item.agent_notes) && item.agent_notes.length > 0 && (
+                <GlassCard title={`Agent Investigation (${item.agent_notes.length})`}>
+                    <ol className="space-y-3">
+                        {item.agent_notes.map((entry, i) => (
+                            <li key={i} className="flex gap-3">
+                                <div className="shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-xs font-bold">
+                                    {entry.author?.[0]?.toUpperCase() ?? 'A'}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-baseline gap-2">
+                                        <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                                            {entry.author || 'agent'}
+                                        </p>
+                                        <span className="text-[11px] text-gray-400">
+                                            {new Date(entry.at).toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 whitespace-pre-wrap">
+                                        {entry.note}
+                                    </p>
+                                </div>
+                            </li>
+                        ))}
+                    </ol>
+                </GlassCard>
+            )}
+
             {/* Proposed Fix (Auto-resolvable) — rendered when an agent has
                 attached a diff to this feedback's cluster via the Agent API.
                 Developer reviews the diff, clicks Approve, cluster resolves
@@ -347,15 +414,35 @@ export function FeedbackDetailPage() {
                                     </button>
                                 )}
                             </div>
-                            <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-x-auto max-h-96 border border-gray-200 dark:border-gray-700 whitespace-pre">
-                                {cluster.proposed_fix.diff}
-                            </pre>
+                            <DiffView diff={cluster.proposed_fix.diff} />
+
                         </div>
                     ) : (
-                        <p className="text-sm text-gray-500">
-                            This cluster looks narrow enough for an automated fix (typo, colour,
-                            or null check). An agent can propose a diff via the Agent API.
-                        </p>
+                        <div className="space-y-3">
+                            <p className="text-sm text-gray-500">
+                                This cluster looks narrow enough for an automated fix (typo, colour,
+                                or null check). Ask your configured agent to propose a diff, or have
+                                an agent post one directly via the Agent API.
+                            </p>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={handleAskAgent}
+                                    disabled={askingAgent}
+                                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                    </svg>
+                                    {askingAgent ? 'Notifying agent…' : 'Ask the agent'}
+                                </button>
+                                {askAgentMessage && (
+                                    <span className="text-xs text-gray-500 dark:text-gray-400">{askAgentMessage}</span>
+                                )}
+                            </div>
+                            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+                                Requires an agent webhook URL configured under <strong>Settings → Agent Webhook URL</strong>.
+                            </p>
+                        </div>
                     )}
                 </GlassCard>
             )}
@@ -365,10 +452,19 @@ export function FeedbackDetailPage() {
                 card never clutters the layout for single-reporter tickets. */}
             {clusterSiblings.length > 0 && (
                 <GlassCard title={`Also reported by ${clusterSiblings.length} other user${clusterSiblings.length === 1 ? '' : 's'}`}>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                        The AI grouped these submissions as the same issue. Resolving this ticket
-                        notifies everyone below.
-                    </p>
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                            The AI grouped these submissions as the same issue. Resolving this ticket
+                            notifies everyone below.
+                        </p>
+                        <button
+                            onClick={handleSplitFromCluster}
+                            className="text-xs font-medium text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 underline-offset-2 hover:underline shrink-0"
+                            title="Detach this feedback from the cluster — useful when the AI grouped it incorrectly"
+                        >
+                            Not the same issue?
+                        </button>
+                    </div>
                     <div className="divide-y divide-gray-100 dark:divide-white/5">
                         {clusterSiblings.map((sib) => (
                             <button
@@ -681,6 +777,55 @@ function MetaItem({ label, value }: { label: string; value: string | null | unde
                 {value || '\u2014'}
             </p>
         </div>
+    );
+}
+
+/**
+ * Lightweight unified-diff viewer. Splits on newlines, classifies each
+ * line by its leading character (+, -, @, ---/+++ headers, context),
+ * and colours additions green / removals red / hunks amber. No external
+ * dep; doesn't try to parse multi-file diffs structurally — just
+ * line-by-line styling, which is enough for the typo / colour / null-check
+ * fixes the auto-resolve flow surfaces.
+ */
+function DiffView({ diff }: { diff: string }) {
+    const lines = diff.split('\n');
+    return (
+        <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900/50 p-0 rounded-lg overflow-x-auto max-h-96 border border-gray-200 dark:border-gray-700 whitespace-pre m-0">
+            {lines.map((line, i) => {
+                let bg = '';
+                let color = 'text-gray-700 dark:text-gray-300';
+                let prefix = ' ';
+                if (line.startsWith('+++') || line.startsWith('---')) {
+                    bg = 'bg-gray-100 dark:bg-gray-800/60';
+                    color = 'text-gray-500 dark:text-gray-400 font-semibold';
+                } else if (line.startsWith('@@')) {
+                    bg = 'bg-amber-50 dark:bg-amber-900/20';
+                    color = 'text-amber-700 dark:text-amber-400 font-semibold';
+                } else if (line.startsWith('+')) {
+                    bg = 'bg-green-50 dark:bg-green-900/20';
+                    color = 'text-green-800 dark:text-green-300';
+                    prefix = '+';
+                } else if (line.startsWith('-')) {
+                    bg = 'bg-red-50 dark:bg-red-900/20';
+                    color = 'text-red-800 dark:text-red-300';
+                    prefix = '-';
+                }
+                return (
+                    <div key={i} className={`flex ${bg}`}>
+                        <span className="select-none w-10 text-right pr-2 text-[10px] text-gray-400 shrink-0 border-r border-gray-200 dark:border-gray-700 py-0.5">
+                            {i + 1}
+                        </span>
+                        <span className={`select-none w-4 text-center text-[10px] shrink-0 ${color} py-0.5`}>
+                            {prefix.trim() || ' '}
+                        </span>
+                        <span className={`flex-1 px-2 ${color} py-0.5`}>
+                            {line.replace(/^[-+]/, '') || ' '}
+                        </span>
+                    </div>
+                );
+            })}
+        </pre>
     );
 }
 

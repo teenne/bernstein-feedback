@@ -12,7 +12,7 @@ import {
   FeedbackDialog,
   FeedbackToast,
   FeedbackErrorBoundary,
-  // posthogSessionProvider,
+  posthogSessionProvider,
 } from "akk-feedback";
 import {
   supabaseAdapter,
@@ -32,7 +32,7 @@ import { AuthToast, type AuthToastKind } from "./components/AuthToast";
 // Kick off PostHog at module load so it's ready before any component
 // mounts. Returns null when VITE_POSTHOG_KEY isn't set — App then
 // drops the sessionProvider so FeedbackProvider works without it.
-// const posthogInstance = initPostHog();
+const posthogInstance = initPostHog();
 import { fetchUserProjectIds, fetchProjects } from "./lib/feedbackApi";
 
 // Lazy loaded pages
@@ -228,7 +228,12 @@ export default function App() {
           getToken: () => auth.accessToken ?? undefined,
         });
     }
-  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey, auth.accessToken]);
+  }, [
+    rawConfig.adapterId,
+    rawConfig.supabaseUrl,
+    rawConfig.supabaseKey,
+    auth.accessToken,
+  ]);
 
   // Hooks must be called before any early return
   const location = useLocation();
@@ -308,12 +313,9 @@ export default function App() {
           adapter: feedbackAdapter,
           userId: auth.userId || undefined,
           userEmail: auth.email || undefined,
-          // Only attach the session provider when PostHog actually
-          // initialized (VITE_POSTHOG_KEY was set). Otherwise stay unset
-          // so the feedback flow doesn't try to read null values.
-          // sessionProvider: posthogInstance
-          //   ? posthogSessionProvider(posthogInstance)
-          //   : undefined,
+          sessionProvider: posthogInstance
+            ? posthogSessionProvider(posthogInstance)
+            : undefined,
         }}
       >
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">

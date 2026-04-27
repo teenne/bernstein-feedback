@@ -482,15 +482,25 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 </button>
                             </div>
 
-                            <SettingsPage
-                                config={rawConfig}
-                                isPro={isPro}
-                                loading={configLoading}
-                                updateSetting={updateSetting}
-                                saveSettings={() => saveSettings(selectedProjectId)}
-                                hasUnsavedChanges={hasUnsavedChanges}
-                                activeProjectId={selectedProjectId || undefined}
-                            />
+                            <div className="mt-2 pt-6 border-t border-gray-200 dark:border-gray-800">
+                                <div className="flex items-center gap-2 mb-6">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                                    </svg>
+                                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Project Settings</h3>
+                                </div>
+                                <SettingsPage
+                                    config={rawConfig}
+                                    isPro={isPro}
+                                    loading={configLoading}
+                                    updateSetting={updateSetting}
+                                    saveSettings={() => saveSettings(selectedProjectId)}
+                                    hasUnsavedChanges={hasUnsavedChanges}
+                                    activeProjectId={selectedProjectId || undefined}
+                                    isAdmin={isAdmin}
+                                    embedded
+                                />
+                            </div>
                         </div>
                     ) : projects.length === 0 ? (
                         <div className="m-8 border border-dashed border-gray-300 dark:border-gray-700 rounded-2xl h-96 flex flex-col items-center justify-center text-center p-8 bg-white/50 dark:bg-white/5">

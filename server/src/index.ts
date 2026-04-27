@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { connectWithRetry } from './db';
 import { startEmailWorker } from './workers/emailWorker';
 import { startClusterWorker } from './workers/clusterWorker';
+import { startAgentWorker } from './workers/agentWorker';
 import { startPgListener } from './lib/pgListener';
 import { attachNotificationWs } from './lib/notificationsWs';
 
@@ -20,6 +21,29 @@ import integrationsRoutes from './routes/integrations';
 
 dotenv.config();
 
+// Debug: print which auth paths are enabled at boot. Helps diagnose
+// the "Invalid or expired token" 401 when Supabase-logged-in admins
+// can't reach protected routes.
+console.log(
+    '[auth] local JWT:', process.env.JWT_SECRET ? 'set' : 'default (dev)',
+    '| Supabase JWT fallback:', process.env.SUPABASE_JWT_SECRET ? 'enabled' : 'DISABLED',
+);
+
+// ─── Production safety boot guards ────────────────────────────────
+// Fail-fast on missing critical env in production. These are silent
+// foot-guns in development (sensible defaults), but in production they
+// either grant world access or use a hardcoded secret — both unsafe.
+if (process.env.NODE_ENV === 'production') {
+    const missing: string[] = [];
+    if (!process.env.JWT_SECRET) missing.push('JWT_SECRET (auth tokens use a hardcoded fallback otherwise)');
+    if (!process.env.ALLOWED_ORIGINS) missing.push('ALLOWED_ORIGINS (CORS would default to *)');
+    if (missing.length > 0) {
+        console.error('Refusing to boot in production with insecure defaults. Missing:');
+        missing.forEach(m => console.error(`  • ${m}`));
+        process.exit(1);
+    }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -31,7 +55,13 @@ app.use(cors({
         ? process.env.ALLOWED_ORIGINS.split(',')
         : '*',
 }));
-app.use(express.json({ limit: '10mb' })); // Allow large payloads for screenshots
+// Capture the raw body alongside the parsed JSON so HMAC signature
+// checks (e.g. PostHog webhook) can run against the exact bytes the
+// sender signed. Adds < 1ms overhead on a normal request.
+app.use(express.json({
+    limit: '10mb', // Allow large payloads for screenshots
+    verify: (req: any, _res, buf: Buffer) => { req.rawBody = buf; },
+}));
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -62,11 +92,24 @@ const startServer = async () => {
     // SMTP_USER / SMTP_PASS aren't configured.
     startEmailWorker();
 
-    // Tier 2: kick off the cluster worker. It polls feedback rows that
-    // don't have a cluster yet, embeds them via OpenAI, and assigns
-    // them to an existing cluster or starts a new one. No-op (with a
-    // log line) when OPENAI_API_KEY isn't set.
-    startClusterWorker();
+    // Tier 2: AI workers — disabled when SELF_HOSTED=true (raw API mode per
+    // the product spec: self-hosted deployments exchange AI features for full
+    // data residency control). Both workers are also individually no-ops when
+    // their required keys / env flags are absent.
+    const selfHosted = process.env.SELF_HOSTED === 'true';
+    if (selfHosted) {
+        console.info('[server] SELF_HOSTED=true — AI clustering and agent worker disabled.');
+    } else {
+        // Cluster worker: polls feedback rows that don't have a cluster yet,
+        // embeds them via OpenAI or Cohere, and assigns them to an existing
+        // cluster or starts a new one.
+        startClusterWorker();
+
+        // Agent worker: polls auto-resolvable clusters, clones their project's
+        // repo, calls GPT-4o to generate a fix diff, writes proposed_fix to
+        // the clusters table. Only active when AGENT_WORKER_ENABLED=true.
+        startAgentWorker();
+    }
 
     // Attach WebSocket endpoint at /api/notifications/ws.
     // Admin apps pointed at this Node server use it instead of polling

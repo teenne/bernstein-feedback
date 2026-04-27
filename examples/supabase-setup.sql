@@ -113,6 +113,9 @@ CREATE TABLE IF NOT EXISTS projects (
 -- Additive migrations for deployments that pre-date the plans system
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_id TEXT REFERENCES plans(id) DEFAULT 'free';
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_limits JSONB DEFAULT '{"max_projects": 1, "max_tickets_per_month": 50}';
+-- Per-project outbound agent webhook URL (admin "Ask the agent" button).
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS agent_webhook_url TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_url TEXT;
 
 -- Ensure 'free' default is set on existing deployments (idempotent)
 ALTER TABLE projects ALTER COLUMN plan SET DEFAULT 'free';
@@ -365,7 +368,7 @@ CREATE INDEX IF NOT EXISTS idx_feedback_embeddings_cosine
 -- ============================================================
 CREATE TABLE IF NOT EXISTS project_ai_keys (
   project_id    TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-  provider      TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai')),
+  provider      TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'cohere')),
   encrypted_key BYTEA NOT NULL,
   key_hint      TEXT NOT NULL,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -465,7 +468,7 @@ CREATE TABLE IF NOT EXISTS email_queue (
 ALTER TABLE email_queue ADD COLUMN IF NOT EXISTS context JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_email_queue_pending
-  ON email_queue(created_at)
+  ON email_queue (created_at ASC, attempts ASC)
   WHERE sent_at IS NULL AND failed_at IS NULL;
 
 -- ============================================================
@@ -486,20 +489,22 @@ RETURNS TRIGGER AS $$
 DECLARE
   project_name TEXT;
   body TEXT;
+  dedup_scope TEXT;
 BEGIN
   IF NEW.status IN ('resolved', 'closed')
      AND COALESCE(OLD.status, '') NOT IN ('resolved', 'closed')
   THEN
-    -- Agent API guard: mirror handle_feedback_resolved() so a bulk
-    -- cluster close only queues one email per unique recipient.
-    IF NEW.cluster_id IS NOT NULL
-       AND EXISTS (
-         SELECT 1 FROM public.clusters
-          WHERE id = NEW.cluster_id AND resolved_at IS NOT NULL
-       )
-    THEN
-      RETURN NEW;
-    END IF;
+    -- Use cluster_id as the dedup scope so every row in a bulk-close
+    -- shares the same key and only the first INSERT succeeds.
+    -- For unclustered rows, fall back to feedback.id.
+    --
+    -- NOTE: do NOT use a cluster guard (checking clusters.resolved_at)
+    -- here. PostgreSQL fires AFTER ROW triggers alphabetically, so
+    -- on_feedback_resolved (notification) fires before
+    -- on_feedback_resolved_email (email). The notification trigger sets
+    -- clusters.resolved_at before this email trigger runs, which would
+    -- cause every clustered resolve email to be skipped.
+    dedup_scope := COALESCE(NEW.cluster_id::text, NEW.id::text);
 
     SELECT COALESCE(name, id) INTO project_name
       FROM public.projects WHERE id = NEW.project_id;
@@ -531,17 +536,45 @@ BEGIN
       ),
       NEW.project_id,
       NEW.id,
-      'resolved:' || NEW.id::text || ':' || recipient_email
+      'resolved:' || dedup_scope || ':' || recipient_email
     FROM (
+      -- Three-level submitter lookup:
+      --   1. feedback.email  (explicitly provided via consent toggle)
+      --   2. user_roles.email (project-member lookup)
+      --   3. auth.users.email (Supabase auth — catches all signed-in users
+      --      who never appeared in user_roles, e.g. created after setup)
       SELECT DISTINCT COALESCE(
         NULLIF(f.email, ''),
-        (SELECT ur.email FROM public.user_roles ur WHERE ur.user_id::text = f.user_id LIMIT 1)
+        (SELECT ur.email FROM public.user_roles ur WHERE ur.user_id::text = f.user_id LIMIT 1),
+        (SELECT au.email FROM auth.users au WHERE au.id::text = f.user_id LIMIT 1)
       ) AS recipient_email
       FROM public.feedback f
       WHERE (
           (NEW.cluster_id IS NOT NULL AND f.cluster_id = NEW.cluster_id)
           OR (NEW.cluster_id IS NULL AND f.id = NEW.id)
       )
+
+      UNION
+
+      -- Fallback: when the submitter is truly anonymous (no email anywhere),
+      -- notify the project owner so resolves never go completely unnoticed.
+      SELECT owner_email AS recipient_email
+      FROM public.projects
+      WHERE id = NEW.project_id
+        AND owner_email IS NOT NULL
+        AND owner_email <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM public.feedback f2
+          WHERE (
+              (NEW.cluster_id IS NOT NULL AND f2.cluster_id = NEW.cluster_id)
+              OR (NEW.cluster_id IS NULL AND f2.id = NEW.id)
+          )
+          AND (
+            NULLIF(f2.email, '') IS NOT NULL
+            OR EXISTS (SELECT 1 FROM public.user_roles ur2 WHERE ur2.user_id::text = f2.user_id AND ur2.email IS NOT NULL)
+            OR EXISTS (SELECT 1 FROM auth.users au2 WHERE au2.id::text = f2.user_id AND au2.email IS NOT NULL)
+          )
+        )
     ) r
     WHERE r.recipient_email IS NOT NULL AND r.recipient_email <> ''
     ON CONFLICT (dedupe_key) DO NOTHING;
@@ -804,10 +837,13 @@ GRANT EXECUTE ON FUNCTION public.feedback_loop_health(TEXT) TO authenticated, se
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_project_status ON feedback(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_feedback_project_created ON feedback(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feedback_type ON feedback(type);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_feedback_screen ON feedback(screen_id) WHERE screen_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_event_id ON feedback(event_id) WHERE event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_feedback_context_fid ON feedback_context(feedback_id);
 CREATE INDEX IF NOT EXISTS idx_project_usage_project_month ON project_usage(project_id, month);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(project_id, user_id, read);
@@ -935,6 +971,31 @@ DROP TRIGGER IF EXISTS on_feedback_resolved ON public.feedback;
 CREATE TRIGGER on_feedback_resolved
   AFTER UPDATE OF status ON public.feedback
   FOR EACH ROW EXECUTE FUNCTION public.handle_feedback_resolved();
+
+-- Status-change notification: open → in_progress. Single submitter, no cluster fan-out.
+CREATE OR REPLACE FUNCTION public.handle_feedback_status_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'in_progress'
+     AND COALESCE(OLD.status, '') = 'open'
+     AND NEW.user_id IS NOT NULL
+     AND NEW.user_id <> ''
+  THEN
+    INSERT INTO public.notifications (project_id, feedback_id, user_id, type, title, message)
+    VALUES (
+      NEW.project_id, NEW.id, NEW.user_id, 'status_change',
+      'We''re looking into "' || COALESCE(NEW.title, '(no title)') || '"',
+      'Your feedback is now in progress. You''ll hear back when it''s resolved.'
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_feedback_status_change ON public.feedback;
+CREATE TRIGGER on_feedback_status_change
+  AFTER UPDATE OF status ON public.feedback
+  FOR EACH ROW EXECUTE FUNCTION public.handle_feedback_status_change();
 
 -- ============================================================
 -- Public RPC functions for the feedback widget (anon-safe)
@@ -1362,5 +1423,41 @@ ON CONFLICT (user_id) DO NOTHING;
 -- INSERT INTO user_roles (user_id, email, role)
 -- VALUES ((SELECT id FROM auth.users WHERE email = 'your-email@example.com'), 'your-email@example.com', 'admin')
 -- ON CONFLICT (user_id) DO UPDATE SET role = 'admin', updated_at = NOW();
+
+-- ============================================================
+-- Storage: feedback-attachments bucket (screenshots)
+-- ============================================================
+-- Creates the public bucket used by the Supabase adapter to store
+-- screenshot images. Base64 screenshots are uploaded here; the DB
+-- stores only the public URL. Safe to re-run — ON CONFLICT DO NOTHING.
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'feedback-attachments',
+  'feedback-attachments',
+  true,
+  5242880,  -- 5 MB per file
+  ARRAY['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- RLS policies for storage.objects
+-- Widget (anon) must be able to upload; everyone can read (bucket is public).
+DO $$ BEGIN
+  CREATE POLICY "anon can upload feedback attachments"
+    ON storage.objects FOR INSERT TO anon
+    WITH CHECK (bucket_id = 'feedback-attachments');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "public read feedback attachments"
+    ON storage.objects FOR SELECT TO anon, authenticated
+    USING (bucket_id = 'feedback-attachments');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "service role manages feedback attachments"
+    ON storage.objects FOR ALL TO service_role
+    USING (bucket_id = 'feedback-attachments');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 SELECT 'All tables created/migrated successfully!' AS status;

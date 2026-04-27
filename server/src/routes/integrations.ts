@@ -1,10 +1,43 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { query } from '../db';
 import { requirePlanFeature, getProjectPlanStatus, incrementUsageCount } from '../helpers/plan';
-import { requireProjectApiKey } from '../middleware/agentAuth';
+import { requireProjectApiKey, requireApiKeyLookup, AgentAuthContext } from '../middleware/agentAuth';
 
 const router = Router();
+
+/**
+ * Optional HMAC-SHA256 signature verification for the PostHog webhook.
+ * If POSTHOG_WEBHOOK_SECRET env is set, we verify `x-posthog-signature`
+ * against HMAC(secret, raw-body). If not set, we fall through to
+ * X-API-Key auth alone — useful for local testing and gradual rollout.
+ *
+ * Constant-time comparison via crypto.timingSafeEqual prevents timing
+ * attacks on the secret. A missing or malformed header when the secret
+ * IS configured is a hard 401 — once you've turned on signing you don't
+ * want to silently accept unsigned requests.
+ */
+function verifyPostHogSignature(req: Request, res: Response, next: NextFunction): void {
+    const secret = process.env.POSTHOG_WEBHOOK_SECRET;
+    if (!secret) { next(); return; }
+
+    const headerSig = req.headers['x-posthog-signature'];
+    const sig = Array.isArray(headerSig) ? headerSig[0] : headerSig;
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    if (typeof sig !== 'string' || !rawBody) {
+        res.status(401).json({ success: false, error: 'Missing or malformed x-posthog-signature header' });
+        return;
+    }
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+        res.status(401).json({ success: false, error: 'Invalid PostHog signature' });
+        return;
+    }
+    next();
+}
 
 /**
  * Inbound integrations — webhooks from third-party tools that create
@@ -50,121 +83,131 @@ const PostHogErrorSchema = z.object({
 });
 
 /**
- * POST /api/v1/integrations/posthog/:projectId/error
+ * Shared handler for both PostHog error routes. Reads the project id from
+ * `req.agent` (set by whichever auth middleware ran — requireProjectApiKey
+ * or requireApiKeyLookup) so the same logic serves both the per-project URL
+ * and the key-only URL.
+ */
+async function handlePostHogError(req: Request, res: Response): Promise<void> {
+    try {
+        const body = PostHogErrorSchema.parse(req.body ?? {});
+        const props = body.properties ?? {};
+
+        const title =
+            body.title?.slice(0, 200) ??
+            props.$exception_message?.slice(0, 200) ??
+            'Automatic error from PostHog';
+        const description =
+            body.description ??
+            [props.$exception_type, props.$exception_message, props.$exception_stack]
+                .filter(Boolean)
+                .join('\n\n')
+                .slice(0, 5000);
+
+        const url = body.url ?? props.$current_url ?? null;
+        const route = props.$pathname ?? null;
+        const sessionId = body.session_id ?? props.$session_id ?? null;
+        const sessionReplayUrl =
+            body.session_replay_url ?? props.$session_recording_url ?? null;
+        const email = body.email ?? props.email ?? null;
+        const userProperties = body.user_properties ?? props.user_properties ?? null;
+
+        const { project_id: projectId } = (req as any).agent as AgentAuthContext;
+
+        const planStatus = await getProjectPlanStatus(projectId);
+        if (!planStatus.can_submit) {
+            res.status(429).json({
+                success: false,
+                error: 'limit_reached',
+                message: planStatus.message,
+            });
+            return;
+        }
+
+        const today = new Date().toISOString().slice(0, 10);
+        const dedupeSeed = `${projectId}|${body.distinct_id ?? ''}|${props.$exception_type ?? ''}|${today}`;
+
+        const existing = await query<{ id: string }>(
+            `SELECT id FROM feedback
+               WHERE project_id = $1
+                 AND event_id = md5($2)::uuid
+                 AND type = 'bug_report'
+               LIMIT 1`,
+            [projectId, dedupeSeed],
+        );
+        if (existing.rows.length > 0) {
+            res.json({ success: true, id: existing.rows[0].id, deduplicated: true });
+            return;
+        }
+
+        const result = await query<{ id: string }>(
+            `INSERT INTO feedback (
+                project_id, type, timestamp, event_id, title, description,
+                url, route,
+                user_id, email,
+                session_id, session_provider, session_replay_url, user_properties
+             ) VALUES (
+                $1, 'bug_report', $2, md5($3)::uuid, $4, $5,
+                $6, $7,
+                $8, $9,
+                $10, 'posthog', $11, $12
+             )
+             RETURNING id`,
+            [
+                projectId,
+                body.timestamp ?? new Date().toISOString(),
+                dedupeSeed,
+                title,
+                description,
+                url,
+                route,
+                body.distinct_id ?? null,
+                email,
+                sessionId,
+                sessionReplayUrl,
+                userProperties ? JSON.stringify(userProperties) : null,
+            ],
+        );
+
+        await incrementUsageCount(projectId);
+        res.status(201).json({ success: true, id: result.rows[0].id });
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+            return;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+}
+
+/**
+ * POST /api/v1/integrations/posthog/error  (key-only — single webhook for all projects)
  *
- * Create a bug-report feedback row from a PostHog error webhook. Gated
- * by `features.posthog` on the project's plan. Ticket limits apply
- * exactly as they would for a user-submitted ticket — a project stuck
- * at 100% will receive a 429 and the error is NOT silently ingested.
+ * The X-API-Key header identifies which project this event belongs to, so
+ * one PostHog webhook destination covers every Bernstein project. Register
+ * BEFORE the /:projectId route so Express doesn't match 'error' as a param.
+ */
+router.post(
+    '/posthog/error',
+    requireApiKeyLookup,
+    verifyPostHogSignature,
+    requirePlanFeature('posthog'),
+    handlePostHogError,
+);
+
+/**
+ * POST /api/v1/integrations/posthog/:projectId/error  (project-id in URL)
  *
- * Dedupe: PostHog's distinct_id + exception_type + today's date is
- * used as an `event_id` so the same error on the same user collapses
- * into one row per day instead of one per page-load.
+ * Kept for backwards compatibility — existing webhook destinations that
+ * already embed the project id in the URL continue to work unchanged.
  */
 router.post(
     '/posthog/:projectId/error',
     requireProjectApiKey,
+    verifyPostHogSignature,
     requirePlanFeature('posthog'),
-    async (req, res) => {
-        try {
-            const body = PostHogErrorSchema.parse(req.body ?? {});
-            const props = body.properties ?? {};
-
-            // Title: prefer explicit, then PostHog exception message
-            const title =
-                body.title?.slice(0, 200) ??
-                props.$exception_message?.slice(0, 200) ??
-                'Automatic error from PostHog';
-            const description =
-                body.description ??
-                [props.$exception_type, props.$exception_message, props.$exception_stack]
-                    .filter(Boolean)
-                    .join('\n\n')
-                    .slice(0, 5000);
-
-            const url = body.url ?? props.$current_url ?? null;
-            const route = props.$pathname ?? null;
-            const sessionId = body.session_id ?? props.$session_id ?? null;
-            const sessionReplayUrl =
-                body.session_replay_url ?? props.$session_recording_url ?? null;
-            const email = body.email ?? props.email ?? null;
-            const userProperties = body.user_properties ?? props.user_properties ?? null;
-
-            const projectId = req.params.projectId;
-
-            // Plan usage gate — matches the widget submit path.
-            const planStatus = await getProjectPlanStatus(projectId);
-            if (!planStatus.can_submit) {
-                res.status(429).json({
-                    success: false,
-                    error: 'limit_reached',
-                    message: planStatus.message,
-                });
-                return;
-            }
-
-            const today = new Date().toISOString().slice(0, 10);
-            // Dedupe: same user + same exception type + same day ≡ same ticket.
-            // md5 → 32 hex chars; Postgres' UUID parser accepts 32 unbroken
-            // hex chars, so `md5(text)::uuid` is valid.
-            const dedupeSeed = `${projectId}|${body.distinct_id ?? ''}|${props.$exception_type ?? ''}|${today}`;
-
-            // Check for an existing row with the same dedupe event_id before
-            // inserting. Avoids relying on a UNIQUE constraint on event_id
-            // (which existing widget events already satisfy per-submission).
-            const existing = await query<{ id: string }>(
-                `SELECT id FROM feedback
-                   WHERE project_id = $1
-                     AND event_id = md5($2)::uuid
-                     AND type = 'bug_report'
-                   LIMIT 1`,
-                [projectId, dedupeSeed],
-            );
-            if (existing.rows.length > 0) {
-                res.json({ success: true, id: existing.rows[0].id, deduplicated: true });
-                return;
-            }
-
-            const result = await query<{ id: string }>(
-                `INSERT INTO feedback (
-                    project_id, type, timestamp, event_id, title, description,
-                    url, route,
-                    user_id, email,
-                    session_id, session_provider, session_replay_url, user_properties
-                 ) VALUES (
-                    $1, 'bug_report', $2, md5($3)::uuid, $4, $5,
-                    $6, $7,
-                    $8, $9,
-                    $10, 'posthog', $11, $12
-                 )
-                 RETURNING id`,
-                [
-                    projectId,
-                    body.timestamp ?? new Date().toISOString(),
-                    dedupeSeed,
-                    title,
-                    description,
-                    url,
-                    route,
-                    body.distinct_id ?? null,
-                    email,
-                    sessionId,
-                    sessionReplayUrl,
-                    userProperties ? JSON.stringify(userProperties) : null,
-                ],
-            );
-
-            await incrementUsageCount(projectId);
-            res.status(201).json({ success: true, id: result.rows[0].id });
-        } catch (error) {
-            if (error instanceof z.ZodError) {
-                res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
-                return;
-            }
-            const msg = error instanceof Error ? error.message : String(error);
-            res.status(500).json({ success: false, error: msg });
-        }
-    },
+    handlePostHogError,
 );
 
 export default router;

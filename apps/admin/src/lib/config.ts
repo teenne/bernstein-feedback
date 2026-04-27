@@ -17,11 +17,47 @@ export const SESSION_KEYS = {
     DEMO_PRO: 'bernstein_demo_pro',
 } as const;
 
-// Helper: get auth headers for Node server requests
+/**
+ * Synchronously read the Supabase session's access_token from the
+ * client-side storage key Supabase persists it under (`sb-<ref>-auth-token`).
+ * Returns null if the user isn't signed in via Supabase — callers then
+ * fall through to the local Node JWT.
+ *
+ * Kept sync on purpose: `getAuthHeaders` is called by non-async code
+ * paths (Dashboard fetches, etc.). Using `supabase.auth.getSession()`
+ * would force async-ify the whole call chain.
+ */
+function readSupabaseAccessToken(): string | null {
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith('sb-') || !key.endsWith('-auth-token')) continue;
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            const parsed = JSON.parse(raw);
+            // Supabase-js v2 stores either a flat object or the auth
+            // response shape — both have `access_token` at the top level.
+            if (typeof parsed?.access_token === 'string') return parsed.access_token;
+            if (typeof parsed?.currentSession?.access_token === 'string') return parsed.currentSession.access_token;
+        }
+    } catch {
+        /* localStorage disabled / JSON malformed */
+    }
+    return null;
+}
+
+// Helper: get auth headers for Node server requests. Prefers the local
+// Node JWT (sessionStorage). Falls back to the Supabase session's
+// access_token so admins logged in via Supabase can still call the
+// Node server — requires SUPABASE_JWT_SECRET on the server to verify.
 export function getAuthHeaders(): Record<string, string> {
-    const token = sessionStorage.getItem(SESSION_KEYS.TOKEN);
-    if (token) {
-        return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const nodeToken = sessionStorage.getItem(SESSION_KEYS.TOKEN);
+    if (nodeToken) {
+        return { 'Authorization': `Bearer ${nodeToken}`, 'Content-Type': 'application/json' };
+    }
+    const supabaseToken = readSupabaseAccessToken();
+    if (supabaseToken) {
+        return { 'Authorization': `Bearer ${supabaseToken}`, 'Content-Type': 'application/json' };
     }
     return { 'Content-Type': 'application/json' };
 }

@@ -13,6 +13,9 @@ Guidance for future Claude sessions working on `server/`. Covers the pieces ship
 - **BYOK** — per-project OpenAI keys encrypted at rest via pgcrypto; owner-gated admin UI on Settings; worker resolves per-project key with global fallback.
 - **Cross-project admin bell** — admin notifications now fetch across every project the user can see (not scoped to the feedback-list dropdown). Implemented via a dedicated admin hook that bypasses the widget; the widget also gained a `notificationScope: 'project' | 'all'` config flag for future use.
 - **Agent API** — `/api/v1/agent/:projectId/*` live. `requireProjectApiKey` middleware + `features.api_access` gate. Endpoints: `GET /backlog`, `GET /clusters/:id`, `POST /clusters/:id/close`, `POST /feedback/:id/note`. Cluster-close guard added to resolve triggers so bulk close fans out exactly once.
+- **PostHog inbound integration** — `src/routes/integrations.ts`. Two webhook routes share one handler (`handlePostHogError`): `POST /api/v1/integrations/posthog/error` (key-only, single webhook for all projects) and `POST /api/v1/integrations/posthog/:projectId/error` (backwards-compat per-project URL). HMAC-SHA256 signing via `POSTHOG_WEBHOOK_SECRET`, daily per-user dedup via `event_id = md5(projectId|distinct_id|type|today)::uuid`, plan-gated on `features.posthog`.
+- **`requireApiKeyLookup` middleware** — `src/middleware/agentAuth.ts`. Key-only project resolution (no projectId in URL): `SELECT id FROM projects WHERE api_key = $1`. Used by the key-only PostHog route so one webhook URL serves all projects.
+- **Performance pass** — TTL in-memory caches for loop-health (1 hr) and stats (5 min) in `feedback.ts`; auth role + project-id caches (2 min) in `auth.ts`; `queueResolveEmail` rewritten to CTE + batch UNNEST INSERT; agent backlog rewritten to UNION ALL with DB-side ORDER BY/LIMIT + COUNT; batch `priority_score` recompute per `processBatch` in `clusterWorker.ts`; projects list capped at LIMIT 500. Migrations 014 (email_queue composite index), 015 (feedback project+status, project+created_at composite indexes), 016 (partial event_id index for PostHog dedup).
 
 ## What's in this package
 
@@ -23,7 +26,8 @@ Express + Postgres. Boots via `src/index.ts` which mounts:
 - `/api/feedback` — submissions, list, detail, triage, cluster siblings, loop-health stats
 - `/api/notifications` + WS `/api/notifications/ws` — loop-close push. Accepts `?project_id=` for scoped mode (widget) or no param for cross-project mode (admin bell). See [Notifications](#notifications).
 - `/api/plans` — list plans, plan-status (public, called by widget)
-- `/api/v1/agent` — reserved for the AI agent API (stub today)
+- `/api/v1/agent` — AI agent API (backlog, cluster detail, cluster close, feedback note)
+- `/api/v1/integrations` — inbound webhooks from third-party tools (PostHog error webhook)
 
 Two background workers start on boot:
 - `emailWorker` — drains `email_queue` every 30s via SMTP. Silent no-op if `SMTP_USER`/`SMTP_PASS` are unset.
@@ -268,6 +272,68 @@ First row in the UPDATE fans out and then sets `clusters.resolved_at = NOW()`. S
 
 `feedback.agent_notes` is a JSONB array of `{at, author, note}` entries, appended via `agent_notes || $entry::jsonb`. Separate from `resolution_note` so agents can add investigation context while a ticket is still open without pretending to resolve it.
 
+## PostHog Inbound Integration — `src/routes/integrations.ts`
+
+Mounted at `/api/v1/integrations`. Accepts inbound webhooks from third-party tools and auto-creates feedback rows. All routes authenticate via `X-API-Key` against `projects.api_key`.
+
+### Routes
+
+| Method | Path | Auth middleware | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/integrations/posthog/error` | `requireApiKeyLookup` | Key-only: one webhook URL works for all projects. The API key alone identifies the project. |
+| POST | `/api/v1/integrations/posthog/:projectId/error` | `requireProjectApiKey` | Backwards-compat: projectId in URL. Kept for existing webhook destinations. |
+
+Both routes share `handlePostHogError()` and are gated on `requirePlanFeature('posthog')`.
+
+### Key design decisions
+
+- **Register key-only route BEFORE `/:projectId/error`** — Express matches routes in declaration order; if the `:projectId` route is first, the literal string `"error"` gets matched as a param.
+- **`requireApiKeyLookup`** — lives in `src/middleware/agentAuth.ts`. Does `SELECT id FROM projects WHERE api_key = $1`. Sets `req.agent = { project_id, api_key }`. The handler reads `req.agent.project_id` (not `req.params.projectId`) so the same function serves both routes.
+- **HMAC signing** — `verifyPostHogSignature` runs when `POSTHOG_WEBHOOK_SECRET` is set. Uses `crypto.timingSafeEqual`. Missing or malformed header is a hard 401 once the secret is configured.
+- **Dedup** — `event_id = md5(projectId|distinct_id|exception_type|today)::uuid`. One ticket per user per exception type per day. Checked before INSERT; no UNIQUE constraint needed. Index: `idx_feedback_event_id` (migration 016, partial on `event_id IS NOT NULL`).
+- **Plan gate** — 429 returned when `can_submit = false`. PostHog errors count against the monthly ticket limit exactly like widget submissions.
+
+### Env vars
+
+```
+POSTHOG_WEBHOOK_SECRET=<shared secret>   # optional; enables HMAC verification
+```
+
+## Performance — in-memory caches and query patterns
+
+Applied during the performance pass. Don't regress these without a replacement.
+
+### TTL caches (`src/routes/feedback.ts`)
+
+```ts
+loopHealthCache   // key = project_id or '__global__', TTL = 1 hr
+statsCache        // key = project_id or '__all__',    TTL = 5 min
+```
+
+Both caches are invalidated in `PATCH /:id/status` when a ticket is resolved/closed. If you add a route that changes ticket counts or statuses, call `loopHealthCache.delete(projectId)` and `statsCache.delete(projectId)`.
+
+### TTL caches (`src/middleware/auth.ts`)
+
+```ts
+roleCache        // key = userId,    TTL = 2 min — avoids per-request role DB lookup
+projectIdsCache  // key = userId,    TTL = 2 min — avoids per-request membership lookup
+```
+
+### Query patterns to keep
+
+- **`queueResolveEmail`** — single CTE gathers project name + all recipient emails, then one batch `INSERT ... SELECT FROM UNNEST($1::text[])`. Do NOT revert to per-recipient inserts.
+- **Agent backlog** — UNION ALL (clusters + unclustered) with `ORDER BY priority_score DESC LIMIT/OFFSET` entirely in SQL. Count query runs in parallel via `Promise.all`. Do NOT sort in Node.
+- **Cluster worker `processBatch`** — accumulates affected cluster IDs, then one `UPDATE clusters SET priority_score = feedback_cluster_priority(id) WHERE id = ANY($1::uuid[])` at the end of the batch. Do NOT call `priority_score = ...` per-row inside `attachToCluster` / `createCluster`.
+- **Admin project list** — capped at `LIMIT 500`. Do NOT remove; unbounded admin queries on large installs will OOM.
+
+### Migrations shipped
+
+| Migration | What it does |
+|---|---|
+| 014 | Replaces single-column `email_queue` index with composite `(created_at ASC, attempts ASC)` |
+| 015 | Adds `idx_feedback_project_status (project_id, status)` and `idx_feedback_project_created (project_id, created_at DESC)` |
+| 016 | Adds partial `idx_feedback_event_id (event_id) WHERE event_id IS NOT NULL` for PostHog dedup |
+
 ## Database invariants
 
 Three SQL files must stay in sync on any schema change (see memory):
@@ -292,3 +358,6 @@ The widget needs three anon-safe RPCs when running against Supabase (not the Nod
 - **Don't create `notifications` rows from application code** — they're all trigger-driven. Writing directly from a route would bypass the recipient fan-out and the pg_notify push.
 - **Don't remove the `email_queue.dedupe_key` UNIQUE constraint** — it's the only thing preventing a project stuck at 100% usage from emailing its owner on every single submission attempt.
 - **Don't forget to update `CLAUDE.md`** — when you add a new route/worker/env var/trigger, update this file so future sessions don't have to rediscover the model.
+- **Don't register `/posthog/:projectId/error` before `/posthog/error`** — Express would match the literal string `"error"` as a projectId param, silently mismatch auth, and the key-only route would never fire.
+- **Don't invalidate TTL caches from outside `feedback.ts`** — the caches are module-level Maps; import the file's exported invalidate helpers or call `.delete()` in the same module. Reaching into the Map from another module creates a hidden coupling.
+- **Don't add per-row `priority_score` recompute in `clusterWorker`** — batch recompute at the end of `processBatch` is intentional. Per-row calls multiply DB round-trips by batch size.

@@ -51,6 +51,8 @@ export interface FeedbackDetail extends FeedbackItem {
     session_provider?: string | null;
     session_replay_url?: string | null;
     user_properties?: Record<string, unknown> | null;
+    // Agent investigation notes (appended via Agent API)
+    agent_notes?: Array<{ at: string; author: string; note: string }> | null;
 }
 
 export interface Stats {

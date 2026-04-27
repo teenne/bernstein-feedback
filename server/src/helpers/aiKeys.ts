@@ -2,7 +2,7 @@ import { query } from '../db';
 
 const ENCRYPTION_SECRET = process.env.AI_KEY_ENCRYPTION_SECRET;
 
-export type AiKeyProvider = 'openai';
+export type AiKeyProvider = 'openai' | 'cohere';
 
 export interface AiKeyMetadata {
     project_id: string;

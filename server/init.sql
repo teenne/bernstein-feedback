@@ -14,11 +14,18 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- pgvector is required for AI clustering (Tier 2). Supabase has it
--- pre-installed. On self-hosted Postgres, install the extension:
---   apt-get install postgresql-17-pgvector
--- If unavailable, the cluster worker is a silent no-op — core feedback
--- still submits + resolves as usual.
-CREATE EXTENSION IF NOT EXISTS vector;
+-- pre-installed. On self-hosted Postgres, install it:
+--   Linux:   apt-get install postgresql-17-pgvector
+--   Windows: download from https://github.com/pgvector/pgvector/releases
+--            copy vector.dll + vector.control + vector--*.sql into
+--            C:\Program Files\PostgreSQL\17\lib\ and \share\extension\
+-- If unavailable the init continues — core feedback still works; the
+-- cluster worker self-disables at runtime.
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'pgvector not installed — AI clustering disabled. Install from https://github.com/pgvector/pgvector';
+END $$;
 
 -- CASCADE so drops in any order resolve FK dependencies automatically.
 -- (notifications.feedback_id → feedback, feedback_context.feedback_id → feedback,
@@ -82,6 +89,12 @@ CREATE TABLE projects (
   plan_limits JSONB DEFAULT '{"max_projects": 1, "max_tickets_per_month": 50}',
   config JSONB DEFAULT '{}',
   api_key TEXT DEFAULT encode(gen_random_bytes(24), 'hex'),
+  -- Per-project outbound webhook URL. Admin UI's "Ask the agent" button
+  -- POSTs a cluster payload here so the project's agent (e.g. a GitHub
+  -- Action running Claude Code) can generate a fix and call back via
+  -- the Agent API.
+  agent_webhook_url TEXT,
+  repo_url          TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -254,20 +267,21 @@ ALTER TABLE clusters
   ADD CONSTRAINT clusters_canonical_fk
   FOREIGN KEY (canonical_feedback_id) REFERENCES feedback(id) ON DELETE SET NULL;
 
--- Feedback embeddings — stored in a sidecar table so the main feedback
--- row stays lean. One row per feedback; populated by the cluster worker.
-CREATE TABLE feedback_embeddings (
-  feedback_id     UUID PRIMARY KEY REFERENCES feedback(id) ON DELETE CASCADE,
-  embedding       vector(1536) NOT NULL,   -- OpenAI text-embedding-3-small dim
-  embedding_model TEXT NOT NULL,
-  created_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
--- IVFFlat index for fast cosine-similarity search. Lists=100 is good
--- up to ~10k rows; increase for larger datasets.
-CREATE INDEX idx_feedback_embeddings_cosine
-  ON feedback_embeddings USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+-- Feedback embeddings — requires pgvector. Skipped gracefully if the
+-- extension is not installed; the cluster worker self-disables at runtime.
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS feedback_embeddings (
+    feedback_id     UUID PRIMARY KEY REFERENCES feedback(id) ON DELETE CASCADE,
+    embedding       vector(1536) NOT NULL,
+    embedding_model TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_feedback_embeddings_cosine
+    ON feedback_embeddings USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Skipping feedback_embeddings table — pgvector not available.';
+END $$;
 
 -- Technical context (heavy data, separated for performance)
 CREATE TABLE feedback_context (
@@ -334,12 +348,14 @@ CREATE TABLE email_queue (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_email_queue_pending
-  ON email_queue(created_at)
+  ON email_queue (created_at ASC, attempts ASC)
   WHERE sent_at IS NULL AND failed_at IS NULL;
 
 -- Indexes
 CREATE INDEX idx_feedback_project ON feedback(project_id);
 CREATE INDEX idx_feedback_status ON feedback(status);
+CREATE INDEX idx_feedback_project_status ON feedback(project_id, status);
+CREATE INDEX idx_feedback_project_created ON feedback(project_id, created_at DESC);
 CREATE INDEX idx_feedback_priority ON feedback(priority) WHERE priority IS NOT NULL;
 CREATE INDEX idx_feedback_labels ON feedback USING GIN (labels);
 CREATE INDEX idx_feedback_session_id ON feedback(session_id) WHERE session_id IS NOT NULL;
@@ -353,6 +369,7 @@ CREATE INDEX idx_feedback_type ON feedback(type);
 CREATE INDEX idx_feedback_created ON feedback(created_at DESC);
 CREATE INDEX idx_feedback_user ON feedback(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX idx_feedback_screen ON feedback(screen_id) WHERE screen_id IS NOT NULL;
+CREATE INDEX idx_feedback_event_id ON feedback(event_id) WHERE event_id IS NOT NULL;
 CREATE INDEX idx_feedback_context_fid ON feedback_context(feedback_id);
 CREATE INDEX idx_notifications_user ON notifications(project_id, user_id, read);
 CREATE INDEX idx_notifications_feedback ON notifications(feedback_id);
@@ -367,7 +384,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS project_ai_keys (
   project_id    TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-  provider      TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai')),
+  provider      TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'cohere')),
   encrypted_key BYTEA NOT NULL,
   key_hint      TEXT NOT NULL,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -506,6 +523,38 @@ CREATE TRIGGER on_feedback_resolved
   FOR EACH ROW EXECUTE FUNCTION public.handle_feedback_resolved();
 
 -- ============================================================
+-- Status-change notification — open → in_progress.
+-- Tells the submitter "we're on it" before resolution. In-app only,
+-- no email (would be spammy). Single submitter, no cluster fan-out.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.handle_feedback_status_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'in_progress'
+     AND COALESCE(OLD.status, '') = 'open'
+     AND NEW.user_id IS NOT NULL
+     AND NEW.user_id <> ''
+  THEN
+    INSERT INTO public.notifications (project_id, feedback_id, user_id, type, title, message)
+    VALUES (
+      NEW.project_id,
+      NEW.id,
+      NEW.user_id,
+      'status_change',
+      'We''re looking into "' || COALESCE(NEW.title, '(no title)') || '"',
+      'Your feedback is now in progress. You''ll hear back when it''s resolved.'
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_feedback_status_change ON public.feedback;
+CREATE TRIGGER on_feedback_status_change
+  AFTER UPDATE OF status ON public.feedback
+  FOR EACH ROW EXECUTE FUNCTION public.handle_feedback_status_change();
+
+-- ============================================================
 -- Email trigger 1: feedback resolve → email to submitter
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.queue_email_on_feedback_resolved()
@@ -513,22 +562,22 @@ RETURNS TRIGGER AS $$
 DECLARE
   project_name TEXT;
   body TEXT;
+  dedup_scope TEXT;
 BEGIN
   IF NEW.status IN ('resolved', 'closed')
      AND COALESCE(OLD.status, '') NOT IN ('resolved', 'closed')
   THEN
-    -- Agent API guard: matches handle_feedback_resolved(). Without this,
-    -- a bulk cluster-close would queue N resolve emails per recipient
-    -- (one per feedback member) even though the dedupe_key includes the
-    -- feedback_id.
-    IF NEW.cluster_id IS NOT NULL
-       AND EXISTS (
-         SELECT 1 FROM public.clusters
-          WHERE id = NEW.cluster_id AND resolved_at IS NOT NULL
-       )
-    THEN
-      RETURN NEW;
-    END IF;
+    -- Use cluster_id as the dedup scope so every row in a bulk-close
+    -- shares the same key and only the first INSERT succeeds.
+    -- For unclustered rows, fall back to feedback.id.
+    --
+    -- NOTE: do NOT use a cluster guard (checking clusters.resolved_at).
+    -- PostgreSQL fires AFTER ROW triggers alphabetically, so
+    -- on_feedback_resolved (notification) fires before
+    -- on_feedback_resolved_email (email). The notification trigger sets
+    -- clusters.resolved_at before this email trigger runs — a cluster guard
+    -- here would cause every clustered resolve email to be skipped.
+    dedup_scope := COALESCE(NEW.cluster_id::text, NEW.id::text);
 
     SELECT COALESCE(name, id) INTO project_name
       FROM public.projects WHERE id = NEW.project_id;
@@ -542,10 +591,6 @@ BEGIN
     body := body || 'Thanks for helping improve ' || COALESCE(project_name, NEW.project_id) || '.' || E'\n\n' ||
             '— Bernstein Feedback';
 
-    -- Tier 2: fan out to every unique email in the cluster. When there's
-    -- no cluster, this still just hits the single submitter. Dedupe key
-    -- includes the recipient email so the same resolve doesn't double-send
-    -- when a user reported the same issue from two emails.
     INSERT INTO public.email_queue
       (to_email, subject, body_text, event_type, context, project_id, feedback_id, dedupe_key)
     SELECT
@@ -564,9 +609,9 @@ BEGIN
       ),
       NEW.project_id,
       NEW.id,
-      'resolved:' || NEW.id::text || ':' || recipient_email
+      'resolved:' || dedup_scope || ':' || recipient_email
     FROM (
-      -- Recipient source: feedback.email from any cluster member,
+      -- Primary: feedback.email from any cluster member,
       -- falling back to user_roles.email by user_id.
       SELECT DISTINCT COALESCE(
         NULLIF(f.email, ''),
@@ -577,6 +622,29 @@ BEGIN
           (NEW.cluster_id IS NOT NULL AND f.cluster_id = NEW.cluster_id)
           OR (NEW.cluster_id IS NULL AND f.id = NEW.id)
       )
+
+      UNION
+
+      -- Fallback: when the submitter had no email (anonymous feedback),
+      -- notify the project owner so at least someone sees the resolve.
+      SELECT owner_email AS recipient_email
+      FROM public.projects
+      WHERE id = NEW.project_id
+        AND owner_email IS NOT NULL
+        AND owner_email <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM public.feedback f2
+          WHERE (
+              (NEW.cluster_id IS NOT NULL AND f2.cluster_id = NEW.cluster_id)
+              OR (NEW.cluster_id IS NULL AND f2.id = NEW.id)
+          )
+          AND (
+            NULLIF(f2.email, '') IS NOT NULL
+            OR EXISTS (
+              SELECT 1 FROM public.user_roles ur2 WHERE ur2.user_id = f2.user_id AND ur2.email IS NOT NULL
+            )
+          )
+        )
     ) r
     WHERE r.recipient_email IS NOT NULL AND r.recipient_email <> ''
     ON CONFLICT (dedupe_key) DO NOTHING;

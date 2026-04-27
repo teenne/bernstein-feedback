@@ -135,32 +135,44 @@ export function supabaseAdapter(options: SupabaseAdapterOptions): SupabaseAdapte
      */
     const uploadScreenshots = async (feedbackId: string, screenshots: string[]): Promise<string[]> => {
         const urls: string[] = [];
-        
+
         for (let i = 0; i < screenshots.length; i++) {
             const base64 = screenshots[i];
-            const fileName = `${feedbackId}/${i}.png`;
-            
-            // Convert to Blob for efficient storage
-            const parts = base64.split(',');
-            const mime = parts[0].match(/:(.*?);/)?.[1];
-            const bstr = atob(parts[1]);
-            let n = bstr.length;
-            const u8arr = new Uint8Array(n);
-            while (n--) u8arr[n] = bstr.charCodeAt(n);
-            const blob = new Blob([u8arr], { type: mime });
 
-            const { data, error } = await supabase.storage
-                .from('feedback-attachments')
-                .upload(fileName, blob, { 
-                    contentType: mime,
-                   upsert: true 
-                });
+            // If it's already a URL (not a data URI), store it directly.
+            if (!base64.startsWith('data:')) {
+                urls.push(base64);
+                continue;
+            }
 
-            if (!error && data) {
-                const { data: urlData } = supabase.storage
+            try {
+                const fileName = `${feedbackId}/${i}.png`;
+                const parts = base64.split(',');
+                const mime = parts[0].match(/:(.*?);/)?.[1] ?? 'image/jpeg';
+                const bstr = atob(parts[1]);
+                let n = bstr.length;
+                const u8arr = new Uint8Array(n);
+                while (n--) u8arr[n] = bstr.charCodeAt(n);
+                const blob = new Blob([u8arr], { type: mime });
+
+                const { data, error } = await supabase.storage
                     .from('feedback-attachments')
-                    .getPublicUrl(fileName);
-                urls.push(urlData.publicUrl);
+                    .upload(fileName, blob, { contentType: mime, upsert: true });
+
+                if (error) {
+                    // Bucket missing or upload failed — keep the base64 data URI
+                    // so the screenshot is still stored (in the JSONB column).
+                    console.warn('[Bernstein] Screenshot upload failed, storing inline:', error.message);
+                    urls.push(base64);
+                } else if (data) {
+                    const { data: urlData } = supabase.storage
+                        .from('feedback-attachments')
+                        .getPublicUrl(fileName);
+                    urls.push(urlData.publicUrl);
+                }
+            } catch (err) {
+                console.warn('[Bernstein] Screenshot upload error, storing inline:', err);
+                urls.push(base64);
             }
         }
         return urls;

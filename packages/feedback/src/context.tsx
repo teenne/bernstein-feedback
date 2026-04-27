@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useMemo,
   useRef,
   useEffect,
   type ReactNode,
@@ -20,8 +21,30 @@ import type {
 } from "./schemas";
 import { useNotifications } from "./hooks/useNotifications";
 import { useRageClickDetector } from "./hooks/useRageClickDetector";
+import { useErrorBurstDetector } from "./hooks/useErrorBurstDetector";
+import { useAbandonedFlowDetector } from "./hooks/useAbandonedFlowDetector";
 import { ProactivePrompt } from "./components/ProactivePrompt";
 import { redactSecrets, redactUrl, getElementDescriptor } from "./utils/redact";
+
+// Persist proactive-prompt firing across page reloads so a frustrated
+// user doesn't get re-prompted on every refresh.
+const PROACTIVE_FIRED_KEY = "bf_proactive_fired_v1";
+function readProactiveFired(): boolean {
+  if (typeof sessionStorage === "undefined") return false;
+  try {
+    return sessionStorage.getItem(PROACTIVE_FIRED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeProactiveFired() {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(PROACTIVE_FIRED_KEY, "1");
+  } catch {
+    /* storage disabled */
+  }
+}
 
 interface HighlightedElement {
   selector: string;
@@ -127,26 +150,69 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   } = useNotifications(config);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // Proactive prompts (Tier 1) — rage-click detection. Shown at most
-  // once per session so it can't spam a frustrated user.
+  // Proactive prompts (Tier 1) — three trigger types, one prompt per
+  // session total. Persisted in sessionStorage so a refresh doesn't
+  // re-arm them for an already-frustrated user.
   const triggers = config.proactiveTriggers;
-  const rageClickEnabled =
-    triggers !== false && triggers?.rageClick === true;
-  const [rageClickPrompt, setRageClickPrompt] = useState<{
-    target: string;
-    count: number;
-  } | null>(null);
-  const rageClickFiredRef = useRef(false);
+  const triggersEnabled = triggers !== false && !!triggers;
+  type ProactivePrompt =
+    | { kind: "rageClick"; target: string; count: number }
+    | { kind: "errorBurst"; count: number; lastMessage: string }
+    | { kind: "abandonedFlow"; lastChars: number };
+  const [proactivePrompt, setProactivePrompt] = useState<ProactivePrompt | null>(null);
+  const proactiveFiredRef = useRef<boolean>(readProactiveFired());
+
+  const firePrompt = useCallback((p: ProactivePrompt) => {
+    if (proactiveFiredRef.current) return;
+    proactiveFiredRef.current = true;
+    writeProactiveFired();
+    setProactivePrompt(p);
+  }, []);
+
   useRageClickDetector({
-    enabled: rageClickEnabled && !rageClickFiredRef.current,
+    enabled: triggersEnabled && triggers?.rageClick === true && !proactiveFiredRef.current,
     threshold: triggers ? triggers.rageClickThreshold : undefined,
     windowMs: triggers ? triggers.rageClickWindowMs : undefined,
-    onDetect: (info) => {
-      if (rageClickFiredRef.current) return;
-      rageClickFiredRef.current = true;
-      setRageClickPrompt(info);
-    },
+    onDetect: (info) => firePrompt({ kind: "rageClick", ...info }),
   });
+  useErrorBurstDetector({
+    enabled: triggersEnabled && triggers?.errorBurst === true && !proactiveFiredRef.current,
+    threshold: triggers ? triggers.errorBurstThreshold : undefined,
+    windowMs: triggers ? triggers.errorBurstWindowMs : undefined,
+    onDetect: (info) => firePrompt({ kind: "errorBurst", ...info }),
+  });
+  useAbandonedFlowDetector({
+    enabled: triggersEnabled && triggers?.abandonedFlow === true && !proactiveFiredRef.current,
+    minChars: triggers ? triggers.abandonedMinChars : undefined,
+    onDetect: (info) => firePrompt({ kind: "abandonedFlow", ...info }),
+  });
+
+  // Per-trigger prompt copy + prefilled bug-report draft.
+  const promptCopy = useMemo(() => {
+    if (!proactivePrompt) return null;
+    if (proactivePrompt.kind === "rageClick") {
+      return {
+        title: "Something not working?",
+        message: `We noticed a few clicks on "${proactivePrompt.target}". If it's broken, tell us and we'll take a look.`,
+        bugTitle: `Clicks on ${proactivePrompt.target} don't seem to work`,
+        bugDescription: `I tried clicking ${proactivePrompt.target} multiple times with no response.`,
+      };
+    }
+    if (proactivePrompt.kind === "errorBurst") {
+      return {
+        title: "Something seems off",
+        message: `We caught a few errors in the background. If something just broke for you, we'd love to know.`,
+        bugTitle: `Multiple errors on the page`,
+        bugDescription: `Several errors fired in quick succession. Last message: "${proactivePrompt.lastMessage || 'unknown'}".`,
+      };
+    }
+    return {
+      title: "Don't lose your work",
+      message: `Looks like you started something but didn't finish. Want to tell us what got in the way?`,
+      bugTitle: `I started a form but couldn't finish it`,
+      bugDescription: `I had typed about ${proactivePrompt.lastChars} characters before giving up.`,
+    };
+  }, [proactivePrompt]);
 
   // Dynamic screen identity state
   const [screenIdentity, setScreenIdentity] = useState<{
@@ -716,18 +782,20 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
     <FeedbackContext.Provider value={value}>
       {children}
       <ProactivePrompt
-        show={rageClickPrompt !== null}
-        title="Something not working?"
-        message={`We noticed a few clicks on "${rageClickPrompt?.target}". If it's broken, tell us and we'll take a look.`}
+        show={proactivePrompt !== null && promptCopy !== null}
+        title={promptCopy?.title ?? ""}
+        message={promptCopy?.message ?? ""}
         onReport={() => {
-          const target = rageClickPrompt?.target ?? "this element";
-          setRageClickPrompt(null);
-          openBugReport({
-            title: `Clicks on ${target} don't seem to work`,
-            description: `I tried clicking ${target} multiple times with no response.`,
-          });
+          const copy = promptCopy;
+          setProactivePrompt(null);
+          if (copy) {
+            openBugReport({
+              title: copy.bugTitle,
+              description: copy.bugDescription,
+            });
+          }
         }}
-        onDismiss={() => setRageClickPrompt(null)}
+        onDismiss={() => setProactivePrompt(null)}
       />
     </FeedbackContext.Provider>
   );

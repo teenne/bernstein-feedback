@@ -6,8 +6,12 @@ const POLL_INTERVAL_MS = parseInt(process.env.CLUSTER_POLL_INTERVAL_MS || '30000
 const BATCH_SIZE = parseInt(process.env.CLUSTER_BATCH_SIZE || '10', 10);
 const SIMILARITY_THRESHOLD = parseFloat(process.env.CLUSTER_SIMILARITY_THRESHOLD || '0.85');
 const EMBEDDING_MODEL = process.env.CLUSTER_EMBEDDING_MODEL || 'text-embedding-3-small';
+const COHERE_EMBEDDING_MODEL = process.env.COHERE_EMBEDDING_MODEL || 'embed-english-v3.0';
 const EMBEDDING_INPUT_MAX_CHARS = 8000;
 const FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+
+// Global Cohere key — used when no BYOK key is set and COHERE_API_KEY is present.
+const GLOBAL_COHERE_KEY = process.env.COHERE_API_KEY || null;
 
 interface UnclusteredRow {
     id: string;
@@ -44,6 +48,10 @@ function getOpenAiClient(apiKey: string): OpenAI {
 }
 
 let workerDisabled = false;
+// Prevents a second setInterval tick from starting a new batch while the
+// previous one is still running (Node.js fires setInterval regardless of
+// whether the prior async callback has resolved).
+let batchInProgress = false;
 
 function buildEmbeddingInput(row: UnclusteredRow): string {
     const parts = [row.title.trim()];
@@ -84,21 +92,47 @@ async function embed(client: OpenAI, text: string): Promise<number[]> {
     return response.data[0].embedding;
 }
 
+async function embedWithCohere(apiKey: string, text: string): Promise<number[]> {
+    const response = await fetch('https://api.cohere.ai/v1/embed', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            texts: [text],
+            model: COHERE_EMBEDDING_MODEL,
+            input_type: 'search_document',
+        }),
+    });
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`Cohere embed failed ${response.status}: ${body}`);
+    }
+    const data = await response.json() as { embeddings: number[][] };
+    return data.embeddings[0];
+}
+
+type ResolvedProvider =
+    | { type: 'openai'; client: OpenAI; source: 'byok' | 'global' }
+    | { type: 'cohere'; apiKey: string; source: 'byok' | 'global' };
+
 /**
- * Resolve which OpenAI client to use for a given project.
+ * Resolve which embedding provider to use for a given project.
  * Precedence:
- *   1. Project BYOK key (project_ai_keys row)
- *   2. Global OPENAI_API_KEY env var
- *   3. null → caller must skip the row
+ *   1. Project BYOK key (project_ai_keys row) — provider can be 'openai' or 'cohere'
+ *   2. Global OPENAI_API_KEY env var (OpenAI)
+ *   3. Global COHERE_API_KEY env var (Cohere)
+ *   4. null → caller must skip the row
  */
-async function resolveClientForProject(projectId: string): Promise<{
-    client: OpenAI;
-    source: 'byok' | 'global';
-} | null> {
+async function resolveClientForProject(projectId: string): Promise<ResolvedProvider | null> {
     try {
         const byok = await getProjectAiKey(projectId);
         if (byok?.key) {
-            return { client: getOpenAiClient(byok.key), source: 'byok' };
+            if (byok.provider === 'cohere') {
+                return { type: 'cohere', apiKey: byok.key, source: 'byok' };
+            }
+            return { type: 'openai', client: getOpenAiClient(byok.key), source: 'byok' };
         }
     } catch (err) {
         console.warn(
@@ -107,7 +141,10 @@ async function resolveClientForProject(projectId: string): Promise<{
         );
     }
     if (globalOpenAi) {
-        return { client: globalOpenAi, source: 'global' };
+        return { type: 'openai', client: globalOpenAi, source: 'global' };
+    }
+    if (GLOBAL_COHERE_KEY) {
+        return { type: 'cohere', apiKey: GLOBAL_COHERE_KEY, source: 'global' };
     }
     return null;
 }
@@ -145,11 +182,13 @@ async function attachToCluster(feedbackId: string, clusterId: string): Promise<v
     // the correct count on the next attach. Costs one extra index scan
     // per attach — cheap, and the partial index on feedback(cluster_id)
     // keeps it fast.
+    // priority_score is intentionally omitted here — it's batched once per
+    // processBatch after all rows have been processed (avoids N calls to the
+    // feedback_cluster_priority() SQL function inside the loop).
     await query(
         `UPDATE clusters
             SET submission_count = (SELECT COUNT(*)::INT FROM feedback WHERE cluster_id = $1),
-                last_seen_at     = NOW(),
-                priority_score   = feedback_cluster_priority(id)
+                last_seen_at     = NOW()
           WHERE id = $1`,
         [clusterId],
     );
@@ -170,117 +209,166 @@ async function createCluster(row: UnclusteredRow): Promise<string> {
     // Same self-healing recount as attachToCluster. For a fresh cluster
     // this always writes 1, but stays correct if the seed row ever gets
     // re-assigned or duplicated.
+    // priority_score is batched once per processBatch — omitted here.
     await query(
         `UPDATE clusters
-            SET submission_count = (SELECT COUNT(*)::INT FROM feedback WHERE cluster_id = $1),
-                priority_score   = feedback_cluster_priority(id)
+            SET submission_count = (SELECT COUNT(*)::INT FROM feedback WHERE cluster_id = $1)
           WHERE id = $1`,
         [clusterId],
     );
     return clusterId;
 }
 
-async function storeEmbedding(feedbackId: string, vectorLiteral: string): Promise<void> {
-    await query(
+// Returns true when the row was freshly inserted (this worker owns the slot),
+// false when another worker already stored an embedding for this feedback_id.
+// The caller skips cluster assignment on false to prevent two workers from
+// independently creating or attaching to clusters for the same row.
+async function storeEmbedding(feedbackId: string, vectorLiteral: string): Promise<boolean> {
+    const result = await query(
         `INSERT INTO feedback_embeddings (feedback_id, embedding, embedding_model)
          VALUES ($1, $2::vector, $3)
          ON CONFLICT (feedback_id) DO NOTHING`,
         [feedbackId, vectorLiteral, EMBEDDING_MODEL],
     );
+    return (result.rowCount ?? 0) > 0;
 }
 
 // Warn-once cache so we don't log "no key for project X" on every poll.
 const loggedNoKeyProjects = new Set<string>();
 
-async function processRow(row: UnclusteredRow): Promise<void> {
+// Returns the cluster ID that was assigned (attach or create), or null when
+// the row was skipped. processBatch collects these to batch-recompute priority.
+async function processRow(row: UnclusteredRow): Promise<string | null> {
     const lastFailure = recentFailures.get(row.id);
-    if (lastFailure && Date.now() - lastFailure < FAILURE_BACKOFF_MS) return;
+    if (lastFailure && Date.now() - lastFailure < FAILURE_BACKOFF_MS) return null;
 
     const input = buildEmbeddingInput(row);
-    if (!input) return;
+    if (!input) return null;
 
     const resolved = await resolveClientForProject(row.project_id);
     if (!resolved) {
         if (!loggedNoKeyProjects.has(row.project_id)) {
             console.info(
-                `[cluster] skipping project=${row.project_id} — no BYOK key and no global OPENAI_API_KEY. ` +
-                `Set one in Settings → AI Clustering, or OPENAI_API_KEY in server/.env.`,
+                `[cluster] skipping project=${row.project_id} — no BYOK key and no global OPENAI_API_KEY or COHERE_API_KEY. ` +
+                `Set one in Settings → AI Clustering, or add a key to server/.env.`,
             );
             loggedNoKeyProjects.add(row.project_id);
         }
-        return;
+        return null;
     }
     // Reset the warn-once flag the moment a project gets a key configured.
     loggedNoKeyProjects.delete(row.project_id);
 
-    const vector = await embed(resolved.client, input);
+    const vector = resolved.type === 'cohere'
+        ? await embedWithCohere(resolved.apiKey, input)
+        : await embed(resolved.client, input);
     const vectorLiteral = toVectorLiteral(vector);
 
-    await storeEmbedding(row.id, vectorLiteral);
+    const isNewEmbedding = await storeEmbedding(row.id, vectorLiteral);
+    if (!isNewEmbedding) {
+        // Another worker already stored an embedding for this row (ON CONFLICT
+        // DO NOTHING returned rowCount=0). Skip cluster assignment to prevent
+        // two workers from independently seeding duplicate clusters for the
+        // same feedback row.
+        console.log(`[cluster] feedback=${row.id} already claimed by concurrent worker, skipping`);
+        return null;
+    }
 
     const nearest = await findNearestCluster(row.project_id, row.type, row.id, vectorLiteral);
 
+    let affectedClusterId: string;
     if (nearest && nearest.similarity >= SIMILARITY_THRESHOLD) {
         await attachToCluster(row.id, nearest.cluster_id);
+        affectedClusterId = nearest.cluster_id;
         console.log(
             `[cluster] attached feedback=${row.id} → cluster=${nearest.cluster_id} ` +
             `similarity=${nearest.similarity.toFixed(3)}`,
         );
     } else {
-        const clusterId = await createCluster(row);
+        affectedClusterId = await createCluster(row);
         const sim = nearest ? ` (best match ${nearest.similarity.toFixed(3)} < ${SIMILARITY_THRESHOLD})` : '';
-        console.log(`[cluster] new cluster=${clusterId} seeded by feedback=${row.id}${sim}`);
+        console.log(`[cluster] new cluster=${affectedClusterId} seeded by feedback=${row.id}${sim}`);
     }
 
     recentFailures.delete(row.id);
+    return affectedClusterId;
 }
 
 async function processBatch(): Promise<void> {
-    if (workerDisabled) return;
+    if (workerDisabled || batchInProgress) return;
+    batchInProgress = true;
 
-    let rows: UnclusteredRow[];
     try {
-        rows = await fetchUnclustered();
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('does not exist') && (msg.includes('feedback_embeddings') || msg.includes('clusters'))) {
-            console.warn('[cluster] clustering tables missing — disabling worker. Run the Tier 2 schema.');
-            workerDisabled = true;
-            return;
-        }
-        console.error('[cluster] fetch failed:', msg);
-        return;
-    }
-
-    if (rows.length === 0) return;
-
-    console.log(`[cluster] processing ${rows.length} unclustered row(s)`);
-
-    for (const row of rows) {
+        let rows: UnclusteredRow[];
         try {
-            await processRow(row);
+            rows = await fetchUnclustered();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            recentFailures.set(row.id, Date.now());
-            if (msg.includes('operator does not exist') && msg.includes('<=>')) {
-                console.error('[cluster] pgvector not available — disabling worker. Install the `vector` extension.');
+            if (msg.includes('does not exist') && (msg.includes('feedback_embeddings') || msg.includes('clusters'))) {
+                console.warn('[cluster] clustering tables missing — disabling worker. Run the Tier 2 schema.');
                 workerDisabled = true;
                 return;
             }
-            console.warn(`[cluster] failed feedback=${row.id}: ${msg}`);
+            console.error('[cluster] fetch failed:', msg);
+            return;
         }
+
+        if (rows.length === 0) return;
+
+        console.log(`[cluster] processing ${rows.length} unclustered row(s)`);
+
+        const affectedClusters = new Set<string>();
+        for (const row of rows) {
+            try {
+                const clusterId = await processRow(row);
+                if (clusterId) affectedClusters.add(clusterId);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recentFailures.set(row.id, Date.now());
+                if (msg.includes('operator does not exist') && msg.includes('<=>')) {
+                    console.error('[cluster] pgvector not available — disabling worker. Install the `vector` extension.');
+                    workerDisabled = true;
+                    return;
+                }
+                console.warn(`[cluster] failed feedback=${row.id}: ${msg}`);
+            }
+        }
+
+        // Batch-recompute priority_score once per unique affected cluster
+        // instead of calling feedback_cluster_priority(id) inside each
+        // attachToCluster / createCluster (N individual calls → 1 batch UPDATE).
+        if (affectedClusters.size > 0) {
+            await query(
+                `UPDATE clusters SET priority_score = feedback_cluster_priority(id)
+                  WHERE id = ANY($1::uuid[])`,
+                [[...affectedClusters]],
+            ).catch((err: unknown) =>
+                console.warn('[cluster] priority batch update failed:', err instanceof Error ? err.message : String(err)),
+            );
+        }
+    } finally {
+        batchInProgress = false;
     }
+}
+
+/**
+ * Trigger an immediate clustering batch outside the normal poll interval.
+ * Called by the upgrade route so newly paid projects get clustered right
+ * away instead of waiting up to CLUSTER_POLL_INTERVAL_MS.
+ */
+export function triggerImmediateBatch(): void {
+    processBatch().catch((err) => console.error('[cluster] triggered batch failed:', err));
 }
 
 export function startClusterWorker(): void {
     const hasGlobalKey = !!GLOBAL_API_KEY;
+    const hasGlobalCohere = !!GLOBAL_COHERE_KEY;
     const hasByok = !!process.env.AI_KEY_ENCRYPTION_SECRET;
 
-    if (!hasGlobalKey && !hasByok) {
+    if (!hasGlobalKey && !hasGlobalCohere && !hasByok) {
         console.info(
-            '[cluster] Neither OPENAI_API_KEY nor AI_KEY_ENCRYPTION_SECRET is set — ' +
-            'AI clustering disabled. Configure either a global key (single-tenant) or ' +
-            'the BYOK encryption secret (multi-tenant) in server/.env to enable.',
+            '[cluster] No embedding keys configured (OPENAI_API_KEY, COHERE_API_KEY, or ' +
+            'AI_KEY_ENCRYPTION_SECRET) — AI clustering disabled. Add a key to server/.env to enable.',
         );
         return;
     }
@@ -291,9 +379,9 @@ export function startClusterWorker(): void {
     }
 
     console.info(
-        `[cluster] worker started. model=${EMBEDDING_MODEL} interval=${POLL_INTERVAL_MS}ms ` +
-        `batch=${BATCH_SIZE} threshold=${SIMILARITY_THRESHOLD} ` +
-        `global_key=${hasGlobalKey ? 'yes' : 'no'} byok=${hasByok ? 'yes' : 'no'}`,
+        `[cluster] worker started. openai=${EMBEDDING_MODEL} cohere=${COHERE_EMBEDDING_MODEL} ` +
+        `interval=${POLL_INTERVAL_MS}ms batch=${BATCH_SIZE} threshold=${SIMILARITY_THRESHOLD} ` +
+        `global_openai=${hasGlobalKey ? 'yes' : 'no'} global_cohere=${hasGlobalCohere ? 'yes' : 'no'} byok=${hasByok ? 'yes' : 'no'}`,
     );
 
     processBatch().catch((err) => console.error('[cluster] initial batch failed:', err));

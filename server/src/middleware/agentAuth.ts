@@ -61,3 +61,42 @@ export async function requireProjectApiKey(
         res.status(500).json({ success: false, error: msg });
     }
 }
+
+/**
+ * Key-only variant of requireProjectApiKey: resolves the project purely
+ * from the X-API-Key header, with no projectId in the URL.
+ *
+ * Used by the POST /api/v1/integrations/posthog/error endpoint so that
+ * a single PostHog webhook destination works for all projects — you don't
+ * need one webhook per project.
+ */
+export async function requireApiKeyLookup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    const headerKey = req.headers['x-api-key'];
+    const apiKey = Array.isArray(headerKey) ? headerKey[0] : headerKey;
+    if (!apiKey || typeof apiKey !== 'string') {
+        res.status(401).json({ success: false, error: 'Missing X-API-Key header' });
+        return;
+    }
+    try {
+        const result = await query<Pick<Project, 'id' | 'api_key'>>(
+            'SELECT id, api_key FROM projects WHERE api_key = $1',
+            [apiKey],
+        );
+        if (result.rows.length === 0) {
+            res.status(401).json({ success: false, error: 'Invalid API key' });
+            return;
+        }
+        (req as any).agent = {
+            project_id: result.rows[0].id,
+            api_key: apiKey,
+        } satisfies AgentAuthContext;
+        next();
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ success: false, error: msg });
+    }
+}

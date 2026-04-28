@@ -5,6 +5,7 @@ export const CreateProjectSchema = z.object({
     name: z.string().optional(),
     owner_id: z.string().optional(),
     owner_email: z.string().email().optional().or(z.literal('')).or(z.literal(null)),
+    plan_id: z.enum(['free', 'paid']).optional().default('free'),
 });
 
 export const UpdateProjectSchema = z.object({

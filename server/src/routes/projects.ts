@@ -97,7 +97,7 @@ router.delete('/:id/members/:user_id', requireAuth, async (req, res) => {
 // Create project (with free-tier 1-project limit enforcement)
 router.post('/', requireAuth, async (req, res) => {
     try {
-        const { id, name, owner_id, owner_email } = CreateProjectSchema.parse(req.body);
+        const { id, name, owner_id, owner_email, plan_id } = CreateProjectSchema.parse(req.body);
 
         const user = (req as any).user as JwtPayload;
         const ownerId = owner_id || user.user_id;
@@ -123,10 +123,17 @@ router.post('/', requireAuth, async (req, res) => {
             }
         }
 
+        const initialPlan = plan_id ?? 'free';
         const result = await query<Project>(
-            `INSERT INTO projects (id, name, owner_id, owner_email) VALUES ($1, $2, $3, $4) RETURNING *`,
-            [id, name || id, ownerId, owner_email || null]
+            `INSERT INTO projects (id, name, owner_id, owner_email, plan, plan_id)
+             VALUES ($1, $2, $3, $4, $5, $5) RETURNING *`,
+            [id, name || id, ownerId, owner_email || null, initialPlan]
         );
+
+        if (initialPlan === 'paid') {
+            triggerImmediateBatch();
+        }
+
         res.status(201).json({ success: true, data: result.rows[0] });
     } catch (error: any) {
         if (error instanceof z.ZodError) {

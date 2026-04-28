@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
-import { API_URL, useSupabaseDirectly, getAuthHeaders } from '../lib/config';
+import { API_URL, useSupabaseDirectly, getAuthHeaders, SESSION_KEYS } from '../lib/config';
 import { SettingsPage } from '../pages/SettingsPage';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
 import { useAuth } from '../hooks/useAuth';
@@ -210,6 +210,13 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             return;
         }
 
+        // Pick up the plan the user chose on the onboarding plan-selection
+        // screen (stored in sessionStorage by App.tsx handlePlanSelected).
+        // Falls back to 'free' if the user skipped onboarding or navigated
+        // directly to /admin. Cleared after the first successful create so
+        // subsequent projects don't inherit the onboarding choice.
+        const pendingPlan = (sessionStorage.getItem(SESSION_KEYS.SELECTED_PLAN) ?? 'free') as 'free' | 'paid';
+
         setCreating(true);
         setCreateError('');
         try {
@@ -219,10 +226,13 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     name: createForm.name.trim() || id,
                     owner_id: userId,
                     owner_email: userEmail,
+                    plan: pendingPlan,
+                    plan_id: pendingPlan,
                 });
                 if (error) {
                     setCreateError(error.code === '23505' ? 'Project ID already exists' : error.message);
                 } else {
+                    sessionStorage.removeItem(SESSION_KEYS.SELECTED_PLAN);
                     setShowCreateModal(false);
                     fetchProjects();
                     setSelectedProjectId(id);
@@ -231,7 +241,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                 const res = await fetch(`${API_URL}/api/projects`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
-                    body: JSON.stringify({ id, name: createForm.name.trim() || id, owner_id: userId, owner_email: userEmail }),
+                    body: JSON.stringify({ id, name: createForm.name.trim() || id, owner_id: userId, owner_email: userEmail, plan_id: pendingPlan }),
                 });
                 const json = await res.json();
                 if (!json.success) {
@@ -242,6 +252,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                         setCreateError(json.error || 'Failed to create project');
                     }
                 } else {
+                    sessionStorage.removeItem(SESSION_KEYS.SELECTED_PLAN);
                     setShowCreateModal(false);
                     fetchProjects();
                     setSelectedProjectId(id);

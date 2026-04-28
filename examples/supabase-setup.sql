@@ -1460,4 +1460,25 @@ DO $$ BEGIN
     USING (bucket_id = 'feedback-attachments');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- ── plan sync trigger ──────────────────────────────────────────────────────
+-- Keeps plan + plan_id identical after any UPDATE so COALESCE(plan_id, plan)
+-- never sees stale data. plan_id is authoritative.
+CREATE OR REPLACE FUNCTION public.sync_project_plan_columns()
+RETURNS TRIGGER AS $$
+DECLARE
+  effective TEXT;
+BEGIN
+  effective := COALESCE(NEW.plan_id, NEW.plan);
+  NEW.plan    := effective;
+  NEW.plan_id := effective;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_sync_project_plan ON public.projects;
+CREATE TRIGGER trg_sync_project_plan
+  BEFORE UPDATE OF plan, plan_id
+  ON public.projects
+  FOR EACH ROW EXECUTE FUNCTION public.sync_project_plan_columns();
+
 SELECT 'All tables created/migrated successfully!' AS status;

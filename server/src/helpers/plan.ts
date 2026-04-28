@@ -85,6 +85,7 @@ export async function getProjectPlanStatus(projectId: string): Promise<{
 }> {
     const projectResult = await query(
         `SELECT p.plan, p.plan_id, p.plan_limits,
+                COALESCE(p.plan_id, p.plan) AS effective_plan,
                 pl.max_tickets_per_month AS plan_max_tickets,
                 pl.max_projects AS plan_max_projects
          FROM projects p
@@ -110,12 +111,14 @@ export async function getProjectPlanStatus(projectId: string): Promise<{
 
     const ticketsUsed = usageResult.rows.length > 0 ? parseInt(usageResult.rows[0].ticket_count) : 0;
 
+    const effectivePlan: string = project.effective_plan ?? project.plan;
+
     if (ticketsUsed >= maxTickets) {
         return {
             can_submit: false,
             tickets_used: ticketsUsed,
             tickets_limit: maxTickets,
-            plan: project.plan,
+            plan: effectivePlan,
             message: 'Monthly feedback limit reached. Upgrade your plan to continue collecting feedback.',
         };
     }
@@ -124,7 +127,7 @@ export async function getProjectPlanStatus(projectId: string): Promise<{
         can_submit: true,
         tickets_used: ticketsUsed,
         tickets_limit: maxTickets,
-        plan: project.plan,
+        plan: effectivePlan,
     };
 }
 

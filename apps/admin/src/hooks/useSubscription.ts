@@ -1,52 +1,92 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
+type PlanFeatures = {
+    ai_clustering?: boolean;
+    posthog?: boolean;
+    api_access?: boolean;
+    self_hosted?: boolean;
+    [key: string]: unknown;
+};
+
+interface SubscriptionState {
+    /** True for any non-free plan. Kept for backward compatibility. */
+    isPro: boolean;
+    /** Raw plan id from the DB: 'free' | 'paid' | legacy 'pro'. */
+    plan: string | null;
+    /** Feature flags from `plans.features`. Empty object if unknown. */
+    features: PlanFeatures;
+    loading: boolean;
+}
+
+const PAID_PLAN_IDS = new Set(['paid', 'pro', 'enterprise']);
+
 export function useSubscription(projectId: string) {
-    const [isPro, setIsPro] = useState(false);
-    const [loading, setLoading] = useState(true);
+    const [state, setState] = useState<SubscriptionState>({
+        isPro: false,
+        plan: null,
+        features: {},
+        loading: true,
+    });
 
     const checkSubscription = useCallback(async () => {
         if (!projectId) {
-            setLoading(false);
+            setState({ isPro: false, plan: null, features: {}, loading: false });
             return;
         }
 
-        // MOCK/DEMO MODE: Check local storage for override first
-        const demoOverride = localStorage.getItem('bernstein_demo_pro');
-        if (demoOverride === 'true') {
-            setIsPro(true);
-            setLoading(false);
+        // MOCK/DEMO MODE: local override for testing paid UI without a paid account.
+        if (localStorage.getItem('bernstein_demo_pro') === 'true') {
+            setState({
+                isPro: true,
+                plan: 'paid',
+                features: { ai_clustering: true, posthog: true, api_access: true },
+                loading: false,
+            });
             return;
         }
 
         try {
-            if (!supabase) { setIsPro(false); setLoading(false); return; }
-
-            // Only query if user is authenticated
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                setIsPro(false);
-                setLoading(false);
+            if (!supabase) {
+                setState({ isPro: false, plan: null, features: {}, loading: false });
                 return;
             }
 
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                setState({ isPro: false, plan: null, features: {}, loading: false });
+                return;
+            }
+
+            // Join projects → plans so we get both the plan id and the
+            // full feature flag set in one round-trip. `plans:plan_id(...)`
+            // relies on the FK between projects.plan_id and plans.id.
             const { data, error } = await supabase
                 .from('projects')
-                .select('plan')
+                .select('plan, plan_id, plans:plan_id(features)')
                 .eq('id', projectId)
-                .maybeSingle<{ plan: 'free' | 'pro' }>();
+                .maybeSingle<{
+                    plan: string | null;
+                    plan_id: string | null;
+                    plans: { features: PlanFeatures | null } | null;
+                }>();
 
             if (error || !data) {
-                // No project found or error — default to free (no 406 error)
-                setIsPro(false);
-            } else {
-                setIsPro(data.plan === 'pro');
+                setState({ isPro: false, plan: null, features: {}, loading: false });
+                return;
             }
+
+            const planId = data.plan_id || data.plan || 'free';
+            const features = data.plans?.features ?? {};
+            setState({
+                isPro: PAID_PLAN_IDS.has(planId),
+                plan: planId,
+                features,
+                loading: false,
+            });
         } catch (err) {
             console.warn('Subscription check failed:', err);
-            setIsPro(false);
-        } finally {
-            setLoading(false);
+            setState({ isPro: false, plan: null, features: {}, loading: false });
         }
     }, [projectId]);
 
@@ -54,5 +94,11 @@ export function useSubscription(projectId: string) {
         checkSubscription();
     }, [checkSubscription]);
 
-    return { isPro, loading, checkSubscription };
+    return {
+        isPro: state.isPro,
+        plan: state.plan,
+        features: state.features,
+        loading: state.loading,
+        checkSubscription,
+    };
 }

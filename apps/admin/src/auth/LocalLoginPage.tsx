@@ -75,6 +75,16 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
                 email: email.toLowerCase(),
                 role,
             }));
+            // Pre-stage the success toast before flipping auth state, so
+            // App.tsx drains it on the next render. Mirrors the Supabase
+            // path in LoginPage.tsx.
+            sessionStorage.setItem(
+                'auth_flash',
+                JSON.stringify({
+                    kind: 'success',
+                    message: mode === 'register' ? 'Account created successfully.' : 'Signed in successfully.',
+                }),
+            );
             // Notify useAuth to re-read session
             window.dispatchEvent(new Event('local-auth-change'));
             onLogin();

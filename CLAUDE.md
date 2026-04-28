@@ -54,6 +54,22 @@ Note: May need `npx vite example --host 127.0.0.1` on Windows due to IPv6 bindin
 - All types defined with Zod for runtime validation
 - TypeScript types inferred from Zod schemas
 
+**Session Providers** (`src/sessionProviders/`):
+- Generic `SessionProvider` interface: `getSessionId()`, `getUserProperties()`, `getReplayUrl(sessionId)`
+- `posthogSessionProvider(posthog)` — first-class PostHog impl; reads session ID, person properties, and replay URL
+- `logrocketSessionProvider(LogRocket)` — LogRocket reference impl
+- `fullstorySessionProvider(FS)` — FullStory reference impl (supports v1 `window.FS` and v2 `@fullstory/browser`)
+- All providers are defensive (try/catch, return null) so a broken SDK never blocks ticket submission
+- Pass via `config.sessionProvider` on `FeedbackProvider`; omit entirely if not using analytics
+
+**Proactive Triggers** (`src/hooks/`):
+- `useRageClickDetector` — 4+ clicks on same element within 1.5s → prompts user
+- `useErrorBurstDetector` — 3+ `console.error` calls within 10s → prompts user
+- `useAbandonedFlowDetector` — 30+ chars typed then navigated away → prompts user
+- `usePostHogProactiveTriggers` — subscribes to PostHog `$rageclick` + `$exception` events directly (alternative to native detectors when PostHog is already on the page)
+- All three native detectors are integrated into `context.tsx`; one prompt per session (sessionStorage gate)
+- Enable via `config.proactive.enabled + rageClick/errorBurst/abandonedFlow` flags
+
 ### Key APIs
 
 ```tsx
@@ -99,6 +115,8 @@ Key config groups:
 - **User identity**: `userId`, `tenantId`, `role` (minimal, no PII)
 - **Privacy**: `redact` patterns, `enableScreenshot`
 - **Limits**: `maxConsoleErrors`, `maxNetworkErrors`, `maxBreadcrumbs`
+- **Session analytics**: `sessionProvider` — optional; wires PostHog/LogRocket/FullStory session replay into every ticket
+- **Proactive**: `proactive.enabled`, `proactive.rageClick`, `proactive.errorBurst`, `proactive.abandonedFlow`
 
 ## Documentation
 
@@ -106,6 +124,13 @@ Additional documentation is in `docs/`:
 - `configuration.md` - FeedbackProvider props and options
 - `adapters.md` - Adapter usage and custom adapters
 - `theming.md` - CSS variables and dark mode
+
+Scoped CLAUDE.md files:
+- `packages/feedback/CLAUDE.md` - widget internals
+- `server/CLAUDE.md` - plan gating, billing seam, cluster worker, BYOK keys, agent API, PostHog inbound integration, ownership model. **Read this before touching plan logic, clustering, BYOK, billing, or integrations.**
+
+Deep-dive docs:
+- `docs/ai-clustering-setup.md` - credentials checklist, BYOK setup, deployment matrix, smoke test, failure modes.
 
 ## Recommended Plugins
 

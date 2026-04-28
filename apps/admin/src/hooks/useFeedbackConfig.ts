@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useSubscription } from './useSubscription';
+import { API_URL, useSupabaseDirectly, apiFetch } from '../lib/config';
 
 export type AdapterId = 'local' | 'supabase' | 'console';
 
@@ -34,61 +35,62 @@ const DEFAULT_CONFIG: FeedbackConfigState = {
 
 const STORAGE_KEY = 'bernstein_config_v1';
 
+function loadFromStorage(pid: string): FeedbackConfigState {
+    try {
+        const saved = localStorage.getItem(`${STORAGE_KEY}_${pid}`);
+        // Always start from DEFAULT_CONFIG — never blend a previous project's values
+        if (saved) return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+    } catch {
+        // corrupted entry — fall through
+    }
+    return { ...DEFAULT_CONFIG };
+}
+
 export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
     const [projectId, setProjectId] = useState(initialProjectId);
+    const [config, setConfig] = useState<FeedbackConfigState>(() => loadFromStorage(initialProjectId));
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const { isPro, loading, checkSubscription } = useSubscription(projectId);
 
-    const [config, setConfig] = useState<FeedbackConfigState>(() => {
-        if (typeof window === 'undefined') return DEFAULT_CONFIG;
-        try {
-            const saved = localStorage.getItem(`${STORAGE_KEY}_${initialProjectId}`);
-            if (saved) return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
-        } catch (e) {
-            console.warn('Failed to load config', e);
-        }
-        return DEFAULT_CONFIG;
-    });
-
-    // Reload config when project ID changes
+    // When the active project changes, do a full config reset then fetch from server
     useEffect(() => {
         if (initialProjectId === projectId) return;
         setProjectId(initialProjectId);
         setHasUnsavedChanges(false);
-
-        // Load from localStorage first
-        try {
-            const saved = localStorage.getItem(`${STORAGE_KEY}_${initialProjectId}`);
-            if (saved) {
-                setConfig(prev => ({ ...prev, ...JSON.parse(saved) }));
-            } else {
-                setConfig(DEFAULT_CONFIG);
-            }
-        } catch {
-            setConfig(DEFAULT_CONFIG);
-        }
+        // Reset to a clean slate for the new project — no bleed from previous project
+        setConfig(loadFromStorage(initialProjectId));
     }, [initialProjectId]);
 
-    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-    const { isPro, loading, checkSubscription } = useSubscription(projectId);
-
+    // fetchManagedConfig: load project config from server (Supabase direct or Node API)
+    // and merge it over the localStorage baseline so the server is always authoritative.
     const fetchManagedConfig = useCallback(async (pid: string) => {
-        if (!supabase) return;
-        const { data, error } = await supabase
-            .from('projects')
-            .select('config')
-            .eq('id', pid)
-            .maybeSingle();
-        if (error) {
-            console.error('Failed to fetch managed config:', error);
-            return;
-        }
-        if (data?.config) {
-            setConfig(prev => ({ ...prev, ...data.config }));
+        try {
+            if (useSupabaseDirectly && supabase) {
+                // Supabase-direct mode
+                const { data, error } = await supabase
+                    .from('projects')
+                    .select('config')
+                    .eq('id', pid)
+                    .maybeSingle();
+                if (error) throw error;
+                if (data?.config) {
+                    setConfig({ ...DEFAULT_CONFIG, ...data.config });
+                    // Persist server values to localStorage so they survive a reload
+                    localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(data.config));
+                }
+            } else {
+                // Node server mode
+                const json = await apiFetch(`${API_URL}/api/projects/${pid}`);
+                if (json.data?.config) {
+                    setConfig({ ...DEFAULT_CONFIG, ...json.data.config });
+                    localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(json.data.config));
+                }
+            }
+        } catch (err) {
+            console.warn(`[useFeedbackConfig] failed to load config for ${pid}:`, err);
         }
     }, []);
 
-    // Plan limits are now usage-based (ticket count per month), not cosmetic.
-    // All UI features (theme, branding, adapters) available on all plans.
-    // Pro gates: higher ticket limits, AI clustering, PostHog, etc.
     const enforcedConfig = useMemo(() => config, [config]);
 
     const updateSetting = useCallback(<K extends keyof FeedbackConfigState>(key: K, value: FeedbackConfigState[K]) => {
@@ -98,26 +100,37 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
         });
     }, []);
 
+    // saveSettings: persists to localStorage + server (Supabase or Node)
     const saveSettings = useCallback(async (targetProjectId?: string) => {
         const pid = targetProjectId || projectId;
         if (typeof window === 'undefined' || !pid) return;
         try {
+            // Always write localStorage first — instant, works offline
             localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(config));
-            if (supabase && pid) {
+
+            if (useSupabaseDirectly && supabase) {
+                // Supabase-direct mode
                 const { error } = await supabase
                     .from('projects')
                     .update({ config } as any)
                     .eq('id', pid);
                 if (error) throw error;
+            } else {
+                // Node server mode — PATCH projects.config
+                await apiFetch(`${API_URL}/api/projects/${pid}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ config }),
+                });
             }
+
             setHasUnsavedChanges(false);
         } catch (error) {
-            console.warn('Failed to save feedback config:', error);
+            console.warn('[useFeedbackConfig] failed to save config:', error);
             setHasUnsavedChanges(false);
         }
     }, [config, projectId]);
 
-    // Apply Dark Mode
+    // Apply Dark Mode to <html>
     useEffect(() => {
         if (typeof document === 'undefined') return;
         const html = document.documentElement;
@@ -130,7 +143,7 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
         }
     }, [config.darkMode]);
 
-    // Apply Theme Color
+    // Apply Theme Color CSS variable
     useEffect(() => {
         if (typeof document === 'undefined') return;
         document.documentElement.style.setProperty('--feedback-primary', enforcedConfig.themeColor);

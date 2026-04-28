@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
-import { API_URL, useSupabaseDirectly, getAuthHeaders } from '../lib/config';
+import { API_URL, useSupabaseDirectly, getAuthHeaders, SESSION_KEYS } from '../lib/config';
 import { SettingsPage } from '../pages/SettingsPage';
 import { useFeedbackConfig } from '../hooks/useFeedbackConfig';
 import { useAuth } from '../hooks/useAuth';
@@ -210,6 +210,13 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
             return;
         }
 
+        // Pick up the plan the user chose on the onboarding plan-selection
+        // screen (stored in sessionStorage by App.tsx handlePlanSelected).
+        // Falls back to 'free' if the user skipped onboarding or navigated
+        // directly to /admin. Cleared after the first successful create so
+        // subsequent projects don't inherit the onboarding choice.
+        const pendingPlan = (sessionStorage.getItem(SESSION_KEYS.SELECTED_PLAN) ?? 'free') as 'free' | 'paid';
+
         setCreating(true);
         setCreateError('');
         try {
@@ -219,10 +226,13 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                     name: createForm.name.trim() || id,
                     owner_id: userId,
                     owner_email: userEmail,
+                    plan: pendingPlan,
+                    plan_id: pendingPlan,
                 });
                 if (error) {
                     setCreateError(error.code === '23505' ? 'Project ID already exists' : error.message);
                 } else {
+                    sessionStorage.removeItem(SESSION_KEYS.SELECTED_PLAN);
                     setShowCreateModal(false);
                     fetchProjects();
                     setSelectedProjectId(id);
@@ -231,7 +241,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                 const res = await fetch(`${API_URL}/api/projects`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
-                    body: JSON.stringify({ id, name: createForm.name.trim() || id, owner_id: userId, owner_email: userEmail }),
+                    body: JSON.stringify({ id, name: createForm.name.trim() || id, owner_id: userId, owner_email: userEmail, plan_id: pendingPlan }),
                 });
                 const json = await res.json();
                 if (!json.success) {
@@ -242,6 +252,7 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                         setCreateError(json.error || 'Failed to create project');
                     }
                 } else {
+                    sessionStorage.removeItem(SESSION_KEYS.SELECTED_PLAN);
                     setShowCreateModal(false);
                     fetchProjects();
                     setSelectedProjectId(id);
@@ -482,15 +493,25 @@ export default function Dashboard({ session, onProjectSelect }: DashboardProps) 
                                 </button>
                             </div>
 
-                            <SettingsPage
-                                config={rawConfig}
-                                isPro={isPro}
-                                loading={configLoading}
-                                updateSetting={updateSetting}
-                                saveSettings={() => saveSettings(selectedProjectId)}
-                                hasUnsavedChanges={hasUnsavedChanges}
-                                activeProjectId={selectedProjectId || undefined}
-                            />
+                            <div className="mt-2 pt-6 border-t border-gray-200 dark:border-gray-800">
+                                <div className="flex items-center gap-2 mb-6">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                                    </svg>
+                                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Project Settings</h3>
+                                </div>
+                                <SettingsPage
+                                    config={rawConfig}
+                                    isPro={isPro}
+                                    loading={configLoading}
+                                    updateSetting={updateSetting}
+                                    saveSettings={() => saveSettings(selectedProjectId)}
+                                    hasUnsavedChanges={hasUnsavedChanges}
+                                    activeProjectId={selectedProjectId || undefined}
+                                    isAdmin={isAdmin}
+                                    embedded
+                                />
+                            </div>
                         </div>
                     ) : projects.length === 0 ? (
                         <div className="m-8 border border-dashed border-gray-300 dark:border-gray-700 rounded-2xl h-96 flex flex-col items-center justify-center text-center p-8 bg-white/50 dark:bg-white/5">

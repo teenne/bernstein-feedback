@@ -75,6 +75,13 @@ export interface Feedback {
     resolved_at: string | null;
     resolved_by: string | null;
     resolution_note: string | null;
+    agent_notes: Array<{ at: string; author: string; note: string }>;
+    session_id: string | null;
+    session_provider: string | null;
+    session_replay_url: string | null;
+    user_properties: Record<string, unknown> | null;
+    cluster_id: string | null;
+    priority_score: number | null;
     created_at: string;
 }
 

@@ -1,4 +1,4 @@
-import { query } from '../db';
+import pool, { query } from '../db';
 import { isEmailEnabled, sendEmail, verifySmtp } from '../lib/email';
 import { renderEmail, type EmailEventType } from '../lib/emailTemplates';
 
@@ -18,34 +18,65 @@ interface EmailRow {
 }
 
 async function processBatch(): Promise<void> {
+    // Use a short transaction with FOR UPDATE SKIP LOCKED to atomically claim
+    // rows. A second concurrent worker (restart overlap, horizontal scale)
+    // will skip the locked rows entirely, preventing duplicate email sends.
+    // Rows are claimed by incrementing `attempts` inside the transaction so
+    // that a worker crash after claiming still advances the retry counter and
+    // the row is retried on the next poll rather than silently dropped.
+    const client = await pool.connect();
     let rows: EmailRow[];
+
     try {
-        const result = await query<EmailRow>(
-            `SELECT id, to_email, subject, body_text, body_html,
-                    event_type, context, attempts
-               FROM email_queue
-              WHERE sent_at IS NULL
-                AND failed_at IS NULL
-                AND attempts < $1
-              ORDER BY created_at ASC
-              LIMIT $2`,
-            [MAX_ATTEMPTS, BATCH_SIZE],
-        );
-        rows = result.rows;
-    } catch (err) {
-        // Table may not exist yet in dev/test; stay quiet instead of spamming.
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('email_queue') && msg.includes('does not exist')) {
+        await client.query('BEGIN');
+
+        let result;
+        try {
+            result = await client.query<EmailRow>(
+                `SELECT id, to_email, subject, body_text, body_html,
+                        event_type, context, attempts
+                   FROM email_queue
+                  WHERE sent_at IS NULL
+                    AND failed_at IS NULL
+                    AND attempts < $1
+                  ORDER BY created_at ASC
+                  LIMIT $2
+                 FOR UPDATE SKIP LOCKED`,
+                [MAX_ATTEMPTS, BATCH_SIZE],
+            );
+        } catch (err) {
+            await client.query('ROLLBACK');
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('email_queue') && msg.includes('does not exist')) {
+                return;
+            }
+            console.error('[email] queue fetch failed:', msg);
             return;
         }
-        console.error('[email] queue fetch failed:', msg);
-        return;
-    }
 
-    if (rows.length === 0) {
-        // Optional: periodic "still alive" log
-        // console.debug('[email] queue empty, awaiting work...');
+        rows = result.rows;
+
+        if (rows.length === 0) {
+            await client.query('ROLLBACK');
+            return;
+        }
+
+        // Claim: increment attempts for every row inside the transaction.
+        // The WHERE on the outer SELECT already filtered attempts < MAX_ATTEMPTS,
+        // so this never pushes a row past the retry ceiling unexpectedly.
+        const ids = rows.map(r => r.id);
+        await client.query(
+            `UPDATE email_queue SET attempts = attempts + 1 WHERE id = ANY($1::uuid[])`,
+            [ids],
+        );
+
+        await client.query('COMMIT');
+    } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore rollback error */ }
+        console.error('[email] claim transaction failed:', err instanceof Error ? err.message : String(err));
         return;
+    } finally {
+        client.release();
     }
 
     console.log(`[email] Found ${rows.length} pending emails in queue. Processing...`);
@@ -71,18 +102,19 @@ async function processBatch(): Promise<void> {
             console.log(`[email] sent id=${row.id} to=${row.to_email} event=${row.event_type}`);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            const nextAttempts = row.attempts + 1;
-            const permanentlyFailed = nextAttempts >= MAX_ATTEMPTS;
+            // attempts was already incremented during claim; row.attempts holds
+            // the pre-claim value so add 1 to get the current DB value.
+            const claimedAttempts = row.attempts + 1;
+            const permanentlyFailed = claimedAttempts >= MAX_ATTEMPTS;
             await query(
                 `UPDATE email_queue
-                    SET attempts = $1,
-                        last_error = $2,
-                        failed_at = CASE WHEN $3 THEN NOW() ELSE NULL END
-                  WHERE id = $4`,
-                [nextAttempts, msg, permanentlyFailed, row.id],
+                    SET last_error = $1,
+                        failed_at  = CASE WHEN $2 THEN NOW() ELSE NULL END
+                  WHERE id = $3`,
+                [msg, permanentlyFailed, row.id],
             );
             console.warn(
-                `[email] attempt ${nextAttempts}/${MAX_ATTEMPTS} failed id=${row.id}` +
+                `[email] attempt ${claimedAttempts}/${MAX_ATTEMPTS} failed id=${row.id}` +
                 (permanentlyFailed ? ' (giving up)' : '') +
                 `: ${msg}`,
             );

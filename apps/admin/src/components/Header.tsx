@@ -75,7 +75,7 @@ export function Header({
             </select>
           )}
 
-          <Notification />
+          <Notification onProjectSwitch={onProjectChange} />
 
           <div className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-gray-700">
             <span

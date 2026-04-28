@@ -12,7 +12,7 @@ import {
   FeedbackDialog,
   FeedbackToast,
   FeedbackErrorBoundary,
-  // posthogSessionProvider,
+  posthogSessionProvider,
 } from "akk-feedback";
 import {
   supabaseAdapter,
@@ -32,7 +32,7 @@ import { AuthToast, type AuthToastKind } from "./components/AuthToast";
 // Kick off PostHog at module load so it's ready before any component
 // mounts. Returns null when VITE_POSTHOG_KEY isn't set — App then
 // drops the sessionProvider so FeedbackProvider works without it.
-// const posthogInstance = initPostHog();
+const posthogInstance = initPostHog();
 import { fetchUserProjectIds, fetchProjects } from "./lib/feedbackApi";
 
 // Lazy loaded pages
@@ -86,14 +86,19 @@ export default function App() {
   const auth = useAuth();
 
   // Flash toast drained from sessionStorage after auth redirect. LoginPage
-  // writes a { kind, message } blob before the onAuthStateChange redirect
-  // unmounts it; we show it here once the user is on the authed page.
+  // (Supabase) and LocalLoginPage (Node-server auth) both pre-stage a
+  // { kind, message } blob before the auth-state transition unmounts them;
+  // we show it here once the user is on the authed page.
+  //
+  // Depends on BOTH `auth.isLoggedIn` (Supabase path) and `localAuthed`
+  // (Node-server path). Listening only to one path missed the toast in
+  // the other mode — the original bug.
   const [flash, setFlash] = useState<{
     kind: AuthToastKind;
     message: string;
   } | null>(null);
   useEffect(() => {
-    if (!auth.isLoggedIn) return;
+    if (!auth.isLoggedIn && !localAuthed) return;
     const raw = sessionStorage.getItem("auth_flash");
     if (!raw) return;
     sessionStorage.removeItem("auth_flash");
@@ -103,7 +108,7 @@ export default function App() {
     } catch {
       /* malformed — ignore */
     }
-  }, [auth.isLoggedIn]);
+  }, [auth.isLoggedIn, localAuthed]);
   const {
     config,
     rawConfig,
@@ -172,6 +177,7 @@ export default function App() {
     // project immediately — matches the signup → create flow expected
     // from both Free and Paid paths.
     navigate("/admin");
+    navigate("/admin");
   };
 
   // Build adapter based on raw settings
@@ -222,7 +228,12 @@ export default function App() {
           getToken: () => auth.accessToken ?? undefined,
         });
     }
-  }, [rawConfig.adapterId, rawConfig.supabaseUrl, rawConfig.supabaseKey, auth.accessToken]);
+  }, [
+    rawConfig.adapterId,
+    rawConfig.supabaseUrl,
+    rawConfig.supabaseKey,
+    auth.accessToken,
+  ]);
 
   // Hooks must be called before any early return
   const location = useLocation();
@@ -245,10 +256,17 @@ export default function App() {
     );
   }
 
-  // Plan selection gate — show after registration when no projects exist
+  // Plan selection gate — show after registration when no projects exist.
+  // Render the auth toast alongside the gate so fresh-signup users still
+  // see "Account created successfully" before they pick a plan.
   if (showPlanSelection && projectsLoaded) {
     return (
       <FeedbackErrorBoundary>
+        <AuthToast
+          message={flash?.message || ""}
+          kind={flash?.kind || "success"}
+          onDismiss={() => setFlash(null)}
+        />
         <Suspense fallback={<PageLoader />}>
           <PlanSelectionPage onSelect={handlePlanSelected} />
         </Suspense>
@@ -295,12 +313,9 @@ export default function App() {
           adapter: feedbackAdapter,
           userId: auth.userId || undefined,
           userEmail: auth.email || undefined,
-          // Only attach the session provider when PostHog actually
-          // initialized (VITE_POSTHOG_KEY was set). Otherwise stay unset
-          // so the feedback flow doesn't try to read null values.
-          // sessionProvider: posthogInstance
-          //   ? posthogSessionProvider(posthogInstance)
-          //   : undefined,
+          sessionProvider: posthogInstance
+            ? posthogSessionProvider(posthogInstance)
+            : undefined,
         }}
       >
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">

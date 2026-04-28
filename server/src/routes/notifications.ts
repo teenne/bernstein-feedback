@@ -7,20 +7,32 @@ import { Notification } from '../schemas/tables';
 
 const router = Router();
 
-// Get notifications for the authenticated user in a project
+// Get notifications for the authenticated user.
+// - With `?project_id=<id>`: scoped to one project (widget / project view).
+// - Without `project_id`: returns every notification this user can see
+//   (admin bell in the dashboard). Scoping is still enforced by the
+//   `user_id = $1` filter — the notification fan-out trigger only writes
+//   rows for legitimate recipients (project members + global admins), so
+//   the user_id check is sufficient access control.
 router.get('/', requireAuth, async (req, res) => {
     try {
         const { project_id } = GetNotificationsSchema.parse(req.query);
         const user = (req as any).user as JwtPayload;
 
-        const result = await query<Pick<Notification, 'id' | 'project_id' | 'feedback_id' | 'type' | 'title' | 'message' | 'read' | 'created_at'>>(
-            `SELECT id, project_id, feedback_id, type, title, message, read, created_at
-             FROM notifications
-             WHERE project_id = $1 AND user_id = $2 AND created_at > NOW() - INTERVAL '30 days'
-             ORDER BY created_at DESC
-             LIMIT 20`,
-            [project_id, user.user_id]
-        );
+        const sql = project_id
+            ? `SELECT id, project_id, feedback_id, type, title, message, read, created_at
+                 FROM notifications
+                WHERE project_id = $2 AND user_id = $1 AND created_at > NOW() - INTERVAL '30 days'
+                ORDER BY created_at DESC
+                LIMIT 20`
+            : `SELECT id, project_id, feedback_id, type, title, message, read, created_at
+                 FROM notifications
+                WHERE user_id = $1 AND created_at > NOW() - INTERVAL '30 days'
+                ORDER BY created_at DESC
+                LIMIT 50`;
+        const params = project_id ? [user.user_id, project_id] : [user.user_id];
+
+        const result = await query<Pick<Notification, 'id' | 'project_id' | 'feedback_id' | 'type' | 'title' | 'message' | 'read' | 'created_at'>>(sql, params);
 
         const unreadCount = result.rows.filter((r) => !r.read).length;
 
@@ -56,16 +68,20 @@ router.patch('/:id/read', requireAuth, async (req, res) => {
     }
 });
 
-// Mark all notifications as read for the authenticated user in a project
+// Mark all notifications as read for the authenticated user.
+// - With `project_id`: only that project's unread.
+// - Without: every unread the user owns (admin bell "mark all").
 router.post('/mark-all-read', requireAuth, async (req, res) => {
     try {
         const { project_id } = MarkAllReadSchema.parse(req.body);
         const user = (req as any).user as JwtPayload;
 
-        await query(
-            'UPDATE notifications SET read = TRUE WHERE project_id = $1 AND user_id = $2 AND read = FALSE',
-            [project_id, user.user_id]
-        );
+        const sql = project_id
+            ? 'UPDATE notifications SET read = TRUE WHERE user_id = $1 AND project_id = $2 AND read = FALSE'
+            : 'UPDATE notifications SET read = TRUE WHERE user_id = $1 AND read = FALSE';
+        const params = project_id ? [user.user_id, project_id] : [user.user_id];
+
+        await query(sql, params);
         res.json({ success: true });
     } catch (error) {
         if (error instanceof z.ZodError) {

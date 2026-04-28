@@ -66,45 +66,62 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
       // Let the opacity transition + browser paint complete
       await new Promise(resolve => setTimeout(resolve, 300));
 
-      const { toCanvas } = await import('html-to-image');
-      const canvas = await toCanvas(document.body, {
-        pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
-        backgroundColor: '#ffffff',
-        skipFonts: true, // Prevent reading cross-origin font rules (fixes SecurityError)
-        // Filter out the widget itself and problematic external stylesheets
-        filter: (node) => {
-          const el = node as HTMLElement;
-          
-          // 1. Always hide the feedback widget itself
-          if (el.id === 'bernstein-widget-root' || el.closest?.('#bernstein-widget-root')) {
-            return false;
-          }
+      const widgetFilter = (node: Node) => {
+        const el = node as HTMLElement;
+        return !(el.id === 'bernstein-widget-root' || el.closest?.('#bernstein-widget-root'));
+      };
 
-          // 2. Skip external stylesheets that cause SecurityError/CORS issues
-          // html-to-image fails if it tries to read cssRules from a cross-origin sheet
-          if (el.tagName === 'LINK' && el.getAttribute('rel') === 'stylesheet') {
-            const href = el.getAttribute('href');
-            if (href && (href.startsWith('http') || href.startsWith('//')) && !href.includes(window.location.host)) {
-              // If it's an external stylesheet without crossorigin="anonymous", skip it 
-              // to prevent "Failed to read the 'cssRules' property" errors.
-              return el.getAttribute('crossorigin') === 'anonymous';
+      let dataUrl: string | null = null;
+
+      // Primary: html-to-image (better CSS fidelity; can fail on CORS-sensitive pages)
+      try {
+        const { toCanvas } = await import('html-to-image');
+        const canvas = await toCanvas(document.body, {
+          pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
+          backgroundColor: '#ffffff',
+          skipFonts: true,
+          filter: (node) => {
+            const el = node as HTMLElement;
+            if (el.id === 'bernstein-widget-root' || el.closest?.('#bernstein-widget-root')) return false;
+            if (el.tagName === 'LINK' && el.getAttribute('rel') === 'stylesheet') {
+              const href = el.getAttribute('href');
+              if (href && (href.startsWith('http') || href.startsWith('//')) && !href.includes(window.location.host)) {
+                return el.getAttribute('crossorigin') === 'anonymous';
+              }
             }
-          }
+            return true;
+          },
+        });
+        dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      } catch (primaryErr) {
+        // eslint-disable-next-line no-console
+        console.warn('[Feedback] html-to-image failed, falling back to html2canvas:', primaryErr);
+      }
 
-          return true;
-        }
-      });
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      // Fallback: html2canvas (handles cross-origin images gracefully via useCORS)
+      if (!dataUrl) {
+        const html2canvas = (await import('html2canvas')).default;
+        const canvas = await html2canvas(document.body, {
+          useCORS: true,
+          allowTaint: false,
+          scale: Math.min(1.5, window.devicePixelRatio || 1),
+          backgroundColor: '#ffffff',
+          ignoreElements: (el) => widgetFilter(el) === false,
+          logging: false,
+        });
+        dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      }
 
-      setFormState(prev => ({
-        ...prev,
-        screenshots: [...prev.screenshots, dataUrl],
-        includeScreenshot: true,
-      }));
+      if (dataUrl) {
+        setFormState(prev => ({
+          ...prev,
+          screenshots: [...prev.screenshots, dataUrl!],
+          includeScreenshot: true,
+        }));
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[Feedback] Screenshot capture failed:', err);
+      console.warn('[Feedback] Screenshot capture failed (both methods):', err);
     } finally {
       setIsHidingForCapture(false);
       setIsCapturing(false);

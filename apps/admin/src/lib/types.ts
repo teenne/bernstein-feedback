@@ -29,6 +29,10 @@ export interface FeedbackItem {
     // Triage fields (P3)
     labels?: string[] | null;
     priority?: FeedbackPriority | null;
+    // Cluster membership (Tier 2)
+    cluster_id?: string | null;
+    /** Populated by the list endpoint via JOIN for badge rendering */
+    cluster_submission_count?: number | null;
     created_at: string;
 }
 
@@ -47,6 +51,8 @@ export interface FeedbackDetail extends FeedbackItem {
     session_provider?: string | null;
     session_replay_url?: string | null;
     user_properties?: Record<string, unknown> | null;
+    // Agent investigation notes (appended via Agent API)
+    agent_notes?: Array<{ at: string; author: string; note: string }> | null;
 }
 
 export interface Stats {

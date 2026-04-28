@@ -269,6 +269,16 @@ export interface FeedbackConfig {
   notificationPollInterval?: number;
   /** Enable notification badge on feedback button (default: true when userId is set) */
   enableNotifications?: boolean;
+  /**
+   * Scope of the notification feed.
+   * - `'project'` (default) — only notifications for `config.projectId`.
+   * - `'all'`               — every notification the authenticated user can access.
+   *
+   * Use `'all'` in admin dashboards where the project dropdown scopes the
+   * *feedback list* but the notification bell should still light up for
+   * activity across every project the user owns / is a member of / admins.
+   */
+  notificationScope?: 'project' | 'all';
 
   // Screen identity (update these as user navigates)
   /** Stable screen identifier (e.g., 'checkout', 'user-settings') */
@@ -326,4 +336,32 @@ export interface FeedbackConfig {
 
   /** Show Branding (Powered by Bernstein) */
   showBranding?: boolean;
+
+  /**
+   * Proactive prompts — small non-intrusive card that appears when the
+   * user shows signs of frustration or abandonment, offering to capture
+   * a bug report without them needing to find the bubble.
+   *
+   * Supported triggers:
+   *   - `rageClick`: 4+ rapid clicks on the same element within 1.5s
+   *   - `errorBurst`: 3+ console errors within 10s
+   *   - `abandonedFlow`: user fills a form ≥X chars then navigates away
+   *     without submitting
+   *
+   * Frequency-capped at one prompt per session (across all trigger
+   * types combined) and persisted in `sessionStorage` so a refresh
+   * doesn't re-arm it.
+   *
+   * Set to `false` or omit to disable.
+   */
+  proactiveTriggers?: {
+    rageClick?: boolean;
+    rageClickThreshold?: number;       // clicks per burst (default 4)
+    rageClickWindowMs?: number;        // burst window in ms (default 1500)
+    errorBurst?: boolean;
+    errorBurstThreshold?: number;      // errors per window (default 3)
+    errorBurstWindowMs?: number;       // window in ms (default 10000)
+    abandonedFlow?: boolean;
+    abandonedMinChars?: number;        // min chars typed before abandon counts (default 30)
+  } | false;
 }

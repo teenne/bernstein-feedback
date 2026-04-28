@@ -177,7 +177,6 @@ export default function App() {
     // project immediately — matches the signup → create flow expected
     // from both Free and Paid paths.
     navigate("/admin");
-    navigate("/admin");
   };
 
   // Build adapter based on raw settings

@@ -608,7 +608,7 @@ router.post(
 // AGENT_GIT_TOKEN env var. Works for any number of projects dynamically.
 // ──────────────────────────────────────────────────────────────
 
-router.get('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('api_access'), async (req, res) => {
+router.get('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('ai_clustering'), async (req, res) => {
     try {
         const meta = await getProjectGitTokenMetadata(req.params.id);
         res.json({ success: true, data: meta });
@@ -618,7 +618,7 @@ router.get('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeatur
     }
 });
 
-router.put('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('api_access'), async (req, res) => {
+router.put('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('ai_clustering'), async (req, res) => {
     try {
         const raw = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
         if (!raw) {
@@ -633,7 +633,7 @@ router.put('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeatur
     }
 });
 
-router.delete('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('api_access'), async (req, res) => {
+router.delete('/:id/git-token', requireAuth, requireProjectOwner, requirePlanFeature('ai_clustering'), async (req, res) => {
     try {
         await deleteProjectGitToken(req.params.id);
         res.json({ success: true });

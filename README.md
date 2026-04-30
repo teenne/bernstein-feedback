@@ -1,4 +1,4 @@
-# Bernstein Feedback System
+# akk-feedback
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18+-61dafb.svg)](https://reactjs.org/)
@@ -46,7 +46,7 @@ Node.js REST API backend (Express + PostgreSQL).
 ### 1. Install the widget
 
 ```bash
-npm install @bernstein/feedback
+npm install akk-feedback
 ```
 
 ### 2. Add to your React app
@@ -57,9 +57,9 @@ import {
   FeedbackButton,
   FeedbackDialog,
   FeedbackToast,
-} from "@bernstein/feedback";
-import { consoleAdapter } from "@bernstein/feedback/adapters";
-import "@bernstein/feedback/styles.css";
+} from "akk-feedback";
+import { consoleAdapter } from "akk-feedback/adapters";
+import "akk-feedback/styles.css";
 
 function App() {
   return (
@@ -87,7 +87,7 @@ Click the floating **Feedback** button, type a message, and submit. Check your b
 When you're ready to persist feedback, swap the adapter:
 
 ```tsx
-import { httpAdapter } from "@bernstein/feedback/adapters";
+import { httpAdapter } from "akk-feedback/adapters";
 
 const adapter = httpAdapter({
   endpoint: "https://your-api.com/api/feedback",
@@ -106,9 +106,9 @@ See [packages/feedback/README.md](./packages/feedback/README.md) for all availab
 3. Use the Supabase adapter:
 
 ```tsx
-import { supabaseAdapter } from "@bernstein/feedback/adapters";
+import { autoAdapter } from "akk-feedback/adapters";
 
-const adapter = supabaseAdapter({
+const adapter = autoAdapter({
   supabaseUrl: "https://your-project.supabase.co",
   supabaseKey: "your-anon-key",
 });
@@ -131,7 +131,7 @@ const adapter = supabaseAdapter({
 3. Point the adapter:
 
    ```tsx
-   import { httpAdapter } from "@bernstein/feedback/adapters";
+   import { httpAdapter } from "akk-feedback/adapters";
 
    const adapter = httpAdapter({
      endpoint: "http://localhost:3000/api/feedback",

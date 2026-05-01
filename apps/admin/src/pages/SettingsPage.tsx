@@ -193,7 +193,13 @@ export function SettingsPage({
     history: any[];
   } | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [hexInput, setHexInput] = useState(config.themeColor ?? "#f59e0b");
   const { lastReportId } = useFeedback();
+
+  // Keep hex text field in sync when color changes externally (swatch, picker)
+  useEffect(() => {
+    setHexInput(config.themeColor ?? "#f59e0b");
+  }, [config.themeColor]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -514,7 +520,7 @@ export function SettingsPage({
                       <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
                         Theme Color
                       </label>
-                      <div className="flex flex-wrap gap-2.5">
+                      <div className="flex flex-wrap gap-2.5 mb-3">
                         {defaultColors.map((color) => (
                           <button
                             key={color.value}
@@ -540,13 +546,42 @@ export function SettingsPage({
                           <input
                             type="color"
                             value={config.themeColor}
-                            onChange={(e) =>
-                              updateSetting("themeColor", e.target.value)
-                            }
+                            onChange={(e) => updateSetting("themeColor", e.target.value)}
                             disabled={!isPro}
                             className="absolute inset-0 opacity-0 cursor-pointer w-full h-full disabled:cursor-not-allowed"
                           />
                         </div>
+                      </div>
+                      {/* Hex text input */}
+                      <div className="flex items-center gap-2 mt-2">
+                        <div
+                          className="w-5 h-5 rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0"
+                          style={{ backgroundColor: config.themeColor }}
+                        />
+                        <input
+                          type="text"
+                          value={hexInput}
+                          disabled={!isPro}
+                          placeholder="#f59e0b"
+                          maxLength={7}
+                          onChange={(e) => {
+                            let val = e.target.value;
+                            if (val && !val.startsWith("#")) val = "#" + val;
+                            setHexInput(val);
+                            if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                              updateSetting("themeColor", val.toLowerCase());
+                            }
+                          }}
+                          onBlur={() => {
+                            if (!/^#[0-9a-fA-F]{6}$/.test(hexInput)) {
+                              setHexInput(config.themeColor ?? "#f59e0b");
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          }}
+                          className="w-24 px-2 py-1 text-xs font-mono rounded-md border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        />
                       </div>
                       {!isPro && <ProLockNote className="mt-2" />}
                     </div>

@@ -5,9 +5,16 @@ import { FeedbackButton } from './components/FeedbackButton';
 import { FeedbackToast } from './components/FeedbackToast';
 import styles from './styles.css?inline';
 
-const FeedbackDialog = lazy(() => import('./components/FeedbackDialog').then(m => ({ default: m.FeedbackDialog })));
+// Kick off the chunk download immediately so it's ready before the user clicks.
+const _dialogChunk = import('./components/FeedbackDialog');
+const FeedbackDialog = lazy(() => _dialogChunk.then(m => ({ default: m.FeedbackDialog })));
 
-import { localStorageAdapter, consoleAdapter, supabaseAdapter } from './adapters';
+import { localStorageAdapter, consoleAdapter, autoAdapter } from './adapters';
+
+// Capture synchronously at module evaluation time — document.currentScript
+// is only valid during the synchronous script execution, not inside callbacks
+// or event listeners fired later.
+const _currentScript = document.currentScript as HTMLScriptElement | null;
 
 // The auto-init script
 const initBernsteinWidget = () => {
@@ -22,22 +29,21 @@ const initBernsteinWidget = () => {
         document.head.appendChild(styleEl);
     }
 
-    // Find the script tag that loaded this script to get data attributes
-    const currentScript = document.currentScript as HTMLScriptElement;
-    
     // Default config fallback
     let projectId = 'demo-app';
     let darkMode = false;
     let _adapterId: string | null = null;
     let supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
     let supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+    let themeColor: string | null = null;
 
-    if (currentScript) {
-        projectId = currentScript.getAttribute('data-project-id') || projectId;
-        _adapterId = currentScript.getAttribute('data-adapter-id');
-        darkMode = currentScript.hasAttribute('data-dark-mode');
-        supabaseUrl = currentScript.getAttribute('data-supabase-url') || supabaseUrl;
-        supabaseKey = currentScript.getAttribute('data-supabase-key') || supabaseKey;
+    if (_currentScript) {
+        projectId = _currentScript.getAttribute('data-project-id') || projectId;
+        _adapterId = _currentScript.getAttribute('data-adapter-id');
+        darkMode = _currentScript.hasAttribute('data-dark-mode');
+        supabaseUrl = _currentScript.getAttribute('data-supabase-url') || supabaseUrl;
+        supabaseKey = _currentScript.getAttribute('data-supabase-key') || supabaseKey;
+        themeColor = _currentScript.getAttribute('data-theme-color');
     }
 
     // Apply dark mode immediately
@@ -53,7 +59,7 @@ const initBernsteinWidget = () => {
     } else if (_adapterId === 'console') {
         adapter = consoleAdapter();
     } else {
-        adapter = supabaseAdapter({ supabaseUrl, supabaseKey });
+        adapter = autoAdapter({ supabaseUrl, supabaseKey });
     }
 
     const container = document.createElement('div');
@@ -65,6 +71,10 @@ const initBernsteinWidget = () => {
     // Inject styles into shadow root
     const styleEl = document.createElement('style');
     styleEl.textContent = styles;
+    // Inject themeColor as CSS variable scoped to the shadow root
+    if (themeColor) {
+        styleEl.textContent += `:host { --feedback-primary: ${themeColor}; --feedback-primary-hover: ${themeColor}; }`;
+    }
     shadow.appendChild(styleEl);
 
     // Host element for React
@@ -78,7 +88,7 @@ const initBernsteinWidget = () => {
     
     root.render(
         <React.StrictMode>
-            <FeedbackProvider config={{ projectId, adapter }}>
+            <FeedbackProvider config={{ projectId, adapter, ...(themeColor ? { themeColor } : {}) }}>
                 <FeedbackButton />
                 <Suspense fallback={null}>
                     <FeedbackDialog portalContainer={host} />

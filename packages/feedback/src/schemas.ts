@@ -337,6 +337,9 @@ export interface FeedbackConfig {
   /** Show Branding (Powered by Bernstein) */
   showBranding?: boolean;
 
+  /** Primary color for the feedback button and accents (e.g. '#f59e0b'). Sets --feedback-primary CSS variable. */
+  themeColor?: string;
+
   /**
    * Proactive prompts — small non-intrusive card that appears when the
    * user shows signs of frustration or abandonment, offering to capture

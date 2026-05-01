@@ -61,10 +61,9 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
   const captureScreenshot = async (): Promise<void> => {
     if (isCapturing) return;
     setIsCapturing(true);
-    setIsHidingForCapture(true);
     try {
-      // Let the opacity transition + browser paint complete
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // Widget root is already excluded by the filters below, so no need to
+      // hide the dialog before capturing — show it immediately instead.
 
       const widgetFilter = (node: Node) => {
         const el = node as HTMLElement;
@@ -123,7 +122,6 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
       // eslint-disable-next-line no-console
       console.warn('[Feedback] Screenshot capture failed (both methods):', err);
     } finally {
-      setIsHidingForCapture(false);
       setIsCapturing(false);
     }
   };
@@ -160,7 +158,13 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
     if (initialFormState.screenshots && initialFormState.screenshots.length > 0) return;
 
     hasAutoCapturedRef.current = true;
-    captureScreenshot();
+    // Defer by two animation frames so the dialog paints and is interactive
+    // before html-to-image / html2canvas starts blocking the main thread.
+    let raf1: number, raf2: number;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => captureScreenshot());
+    });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
     // captureScreenshot is stable for our purposes; we only want this
     // to fire on the open transition, not on every state change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -315,21 +319,10 @@ export function FeedbackDialog({ portalContainer }: { portalContainer?: HTMLElem
   };
 
 
-  // Combined visibility flag for the dialog chrome.
-  // - `isHidingForCapture` covers the explicit hide that captureScreenshot()
-  //   and handleHighlight() trigger.
-  // - The second clause covers the FIRST render after isOpen flips to true:
-  //   if an auto-capture is about to happen on this open, we render the
-  //   dialog already invisible so it doesn't flash on screen, then fade
-  //   it in once the capture completes. Without this, the user sees the
-  //   dialog appear → vanish → reappear, which reads as "two dialogs."
-  const willAutoCaptureNow =
-    isOpen
-    && config.autoScreenshot !== false
-    && !hasAutoCapturedRef.current
-    && !(initialFormState.screenshots && initialFormState.screenshots.length > 0)
-    && formState.screenshots.length === 0;
-  const dialogHidden = isHidingForCapture || willAutoCaptureNow;
+  // Only hide the dialog during element-picker mode. Screenshot capture runs
+  // with the dialog visible because the widget root is already excluded by
+  // the filter/ignoreElements options in captureScreenshot().
+  const dialogHidden = isHidingForCapture;
 
   return (
     <FeedbackErrorBoundary>

@@ -434,6 +434,22 @@ CREATE TABLE IF NOT EXISTS notifications (
 ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 ALTER TABLE notifications ADD CONSTRAINT notifications_type_check CHECK (type IN ('status_change', 'resolved', 'new_feedback'));
 
+-- Per-user project notification subscriptions.
+-- Rows here mean "this user wants to receive notifications for this project"
+-- even if they are not a formal project member. Project members and admins
+-- are already fanned-out by the notification triggers; this table lets any
+-- user opt-in to additional projects (or lets admins scope their bell to
+-- specific projects they care about).
+CREATE TABLE IF NOT EXISTS project_subscriptions (
+  user_id    TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_subscriptions_user
+  ON project_subscriptions(user_id);
+
 -- ============================================================
 -- Email queue
 -- ============================================================

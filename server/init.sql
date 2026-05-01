@@ -31,15 +31,16 @@ END $$;
 -- (notifications.feedback_id → feedback, feedback_context.feedback_id → feedback,
 -- project_usage.project_id → projects, project_members.project_id → projects,
 -- projects.plan_id → plans, email_queue has no FK but is included for a clean slate.)
-DROP TABLE IF EXISTS email_queue       CASCADE;
-DROP TABLE IF EXISTS feedback_context  CASCADE;
-DROP TABLE IF EXISTS feedback          CASCADE;
-DROP TABLE IF EXISTS notifications     CASCADE;
-DROP TABLE IF EXISTS project_usage     CASCADE;
-DROP TABLE IF EXISTS project_members   CASCADE;
-DROP TABLE IF EXISTS projects          CASCADE;
-DROP TABLE IF EXISTS plans             CASCADE;
-DROP TABLE IF EXISTS user_roles        CASCADE;
+DROP TABLE IF EXISTS email_queue              CASCADE;
+DROP TABLE IF EXISTS feedback_context         CASCADE;
+DROP TABLE IF EXISTS feedback                 CASCADE;
+DROP TABLE IF EXISTS notifications            CASCADE;
+DROP TABLE IF EXISTS project_subscriptions   CASCADE;
+DROP TABLE IF EXISTS project_usage            CASCADE;
+DROP TABLE IF EXISTS project_members          CASCADE;
+DROP TABLE IF EXISTS projects                 CASCADE;
+DROP TABLE IF EXISTS plans                    CASCADE;
+DROP TABLE IF EXISTS user_roles               CASCADE;
 
 -- User Roles (dynamic admin system)
 -- First user to register becomes admin, everyone else gets 'user'
@@ -327,6 +328,21 @@ CREATE TABLE notifications (
 -- Safely update constraint if adapting an existing instance
 ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 ALTER TABLE notifications ADD CONSTRAINT notifications_type_check CHECK (type IN ('status_change', 'resolved', 'new_feedback'));
+
+-- Per-user project notification subscriptions.
+-- Rows here mean "this user wants to receive notifications for this project"
+-- even if they are not a formal project member.  Project members and admins
+-- are already fanned-out by the notification triggers; this table lets any
+-- user opt-in to additional projects (or lets admins scope their bell to
+-- specific projects they care about).
+CREATE TABLE project_subscriptions (
+  user_id    TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, project_id)
+);
+
+CREATE INDEX idx_project_subscriptions_user ON project_subscriptions(user_id);
 
 -- Email queue — drained by the Express email worker, fed by triggers below.
 -- See examples/supabase-setup.sql for the rationale.

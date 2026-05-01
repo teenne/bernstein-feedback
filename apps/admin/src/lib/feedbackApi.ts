@@ -51,7 +51,7 @@ export interface FeedbackListFilters {
     status?: string;
     priority?: string;
     q?: string;
-    sort_by?: 'newest_first' | 'oldest_first' | 'priority';
+    sort_by?: 'newest_first' | 'oldest_first' | 'priority' | 'submitted_by';
     limit?: number;
     offset?: number;
 }
@@ -892,4 +892,31 @@ export async function fetchUserProjectIds(): Promise<string[]> {
     })();
 
     return fetchUserProjectIdsInFlight;
+}
+
+// Delete a single feedback item. The server enforces that the title must
+// contain "test" (case-insensitive) to prevent accidental deletion of real
+// submissions.
+export async function deleteFeedbackItem(id: string): Promise<void> {
+    const json = await apiFetch(`${API_URL}/api/feedback/${id}`, { method: 'DELETE' });
+    if (!json?.success) throw new Error(json?.error || 'Delete failed');
+}
+
+// ── Project subscriptions ────────────────────────────────────────────────────
+
+export async function fetchSubscriptions(): Promise<string[]> {
+    const json = await apiFetch(`${API_URL}/api/notifications/subscriptions`);
+    return json?.data ?? [];
+}
+
+export async function subscribeToProject(projectId: string): Promise<void> {
+    await apiFetch(`${API_URL}/api/notifications/subscriptions/${encodeURIComponent(projectId)}`, {
+        method: 'POST',
+    });
+}
+
+export async function unsubscribeFromProject(projectId: string): Promise<void> {
+    await apiFetch(`${API_URL}/api/notifications/subscriptions/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+    });
 }

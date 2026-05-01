@@ -93,4 +93,57 @@ router.post('/mark-all-read', requireAuth, async (req, res) => {
     }
 });
 
+// ── Project subscriptions ────────────────────────────────────────────────────
+// A subscription records that a user wants to receive notifications for a
+// project regardless of whether they are a formal project member.
+
+// GET /api/notifications/subscriptions — list all subscribed project IDs
+router.get('/subscriptions', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const result = await query<{ project_id: string }>(
+            'SELECT project_id FROM project_subscriptions WHERE user_id = $1 ORDER BY project_id',
+            [user.user_id],
+        );
+        res.json({ success: true, data: result.rows.map((r) => r.project_id) });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// POST /api/notifications/subscriptions/:projectId — subscribe
+router.post('/subscriptions/:projectId', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const { projectId } = req.params;
+        await query(
+            `INSERT INTO project_subscriptions (user_id, project_id)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING`,
+            [user.user_id, projectId],
+        );
+        res.json({ success: true });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// DELETE /api/notifications/subscriptions/:projectId — unsubscribe
+router.delete('/subscriptions/:projectId', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const { projectId } = req.params;
+        await query(
+            'DELETE FROM project_subscriptions WHERE user_id = $1 AND project_id = $2',
+            [user.user_id, projectId],
+        );
+        res.json({ success: true });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
 export default router;

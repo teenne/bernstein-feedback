@@ -5,6 +5,10 @@ import {
   fetchUserProjectIds,
   fetchProjects,
   bulkPatchFeedback,
+  deleteFeedbackItem,
+  fetchSubscriptions,
+  subscribeToProject,
+  unsubscribeFromProject,
 } from "../lib/feedbackApi";
 import { useAuth } from "../hooks/useAuth";
 import { LayoutWrapper } from "../components/LayoutWrapper";
@@ -14,7 +18,7 @@ import { ErrorMessage } from "../components/ErrorMessage";
 import { STATUS_CONFIG, TYPE_CONFIG, SEVERITY_CONFIG } from "../lib/constants";
 import type { FeedbackItem } from "../lib/types";
 
-type SortBy = "newest_first" | "oldest_first" | "priority";
+type SortBy = "newest_first" | "oldest_first" | "priority" | "submitted_by";
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100];
 
 export function FeedbackListPage() {
@@ -28,6 +32,10 @@ export function FeedbackListPage() {
   // Bulk-action state — row selection by id
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Subscription state — set of subscribed project IDs
+  const [subscriptions, setSubscriptions] = useState<Set<string>>(new Set());
+  // Delete confirm state — id of the row awaiting confirmation (two-step UX)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   // Debounced search input — the query string is the source of truth so
   // back/forward and deep links work; the local input reflects typing.
   const [searchDraft, setSearchDraft] = useState(searchParams.get("q") || "");
@@ -92,6 +100,46 @@ export function FeedbackListPage() {
     pageSize,
     page,
   ]);
+
+  // Load subscriptions once on mount
+  useEffect(() => {
+    fetchSubscriptions()
+      .then((ids) => setSubscriptions(new Set(ids)))
+      .catch(() => {});
+  }, []);
+
+  const toggleSubscription = async (projectId: string) => {
+    const isSubscribed = subscriptions.has(projectId);
+    setSubscriptions((prev) => {
+      const next = new Set(prev);
+      if (isSubscribed) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+    try {
+      if (isSubscribed) await unsubscribeFromProject(projectId);
+      else await subscribeToProject(projectId);
+    } catch {
+      // revert on failure
+      setSubscriptions((prev) => {
+        const next = new Set(prev);
+        if (isSubscribed) next.add(projectId);
+        else next.delete(projectId);
+        return next;
+      });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteFeedbackItem(id);
+      setPendingDelete(null);
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Delete failed");
+      setPendingDelete(null);
+    }
+  };
 
   const setFilter = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -223,18 +271,50 @@ export function FeedbackListPage() {
             <option value="bug_report">Bug Report</option>
             <option value="feature_request">Feature Request</option>
           </select>
-          <select
-            value={projectFilter}
-            onChange={(e) => setFilter("project_id", e.target.value)}
-            className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 rounded-xl bg-white/80 dark:bg-white/5 backdrop-blur-md text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
-          >
-            <option value="">All Projects</option>
-            {userProjects.map((pid) => (
-              <option key={pid} value={pid}>
-                {pid}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select
+              value={projectFilter}
+              onChange={(e) => setFilter("project_id", e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 rounded-xl bg-white/80 dark:bg-white/5 backdrop-blur-md text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+            >
+              <option value="">All Projects</option>
+              {userProjects.map((pid) => (
+                <option key={pid} value={pid}>
+                  {pid}
+                </option>
+              ))}
+            </select>
+            {/* Subscription bell — only visible when a specific project is selected */}
+            {projectFilter && (
+              <button
+                onClick={() => toggleSubscription(projectFilter)}
+                title={
+                  subscriptions.has(projectFilter)
+                    ? "Unsubscribe from notifications for this project"
+                    : "Subscribe to notifications for this project"
+                }
+                className={`p-2 rounded-xl border transition-colors ${
+                  subscriptions.has(projectFilter)
+                    ? "bg-amber-50 dark:bg-amber-500/10 border-amber-300 dark:border-amber-500/40 text-amber-600 dark:text-amber-400"
+                    : "bg-white/80 dark:bg-white/5 border-gray-200 dark:border-white/10 text-gray-400 hover:text-amber-500"
+                }`}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill={subscriptions.has(projectFilter) ? "currentColor" : "none"}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              </button>
+            )}
+          </div>
           <select
             value={statusFilter}
             onChange={(e) => setFilter("status", e.target.value)}
@@ -266,6 +346,7 @@ export function FeedbackListPage() {
             <option value="newest_first">Newest first</option>
             <option value="oldest_first">Oldest first</option>
             <option value="priority">By priority</option>
+            <option value="submitted_by">By submitted by</option>
           </select>
         </div>
 
@@ -398,6 +479,7 @@ export function FeedbackListPage() {
                   <th className="text-left px-5 py-3 font-medium text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
                     Time
                   </th>
+                  <th className="px-5 py-3 w-10" title="Delete (test messages only)" />
                 </tr>
               </thead>
               <tbody>
@@ -552,6 +634,52 @@ export function FeedbackListPage() {
                       </td>
                       <td className="px-5 py-3.5 text-gray-400 dark:text-gray-500 text-xs whitespace-nowrap">
                         {timeAgo(item.created_at)}
+                      </td>
+                      <td
+                        className="px-3 py-3.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {isAdmin && item.title?.toLowerCase().includes("test") && (
+                          pendingDelete === item.id ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleDelete(item.id)}
+                                className="px-2 py-0.5 text-[10px] font-medium rounded bg-red-500 text-white hover:bg-red-600"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setPendingDelete(null)}
+                                className="px-2 py-0.5 text-[10px] font-medium rounded bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300 hover:bg-gray-200"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setPendingDelete(item.id)}
+                              title="Delete test message"
+                              className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                              </svg>
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   );

@@ -297,6 +297,8 @@ router.get('/', requireAuth, async (req, res) => {
                            WHEN 'medium' THEN 3
                            WHEN 'low'    THEN 4
                            ELSE 5 END, created_at DESC`;
+        } else if (sort_by === 'submitted_by') {
+            outerOrder = `LOWER(COALESCE(NULLIF(email, ''), user_id, '')) ASC, created_at DESC`;
         }
 
         // Count distinct cluster-or-id groups so the pagination total reflects
@@ -534,6 +536,43 @@ router.get('/:id', requireAuth, async (req, res) => {
         }
 
         res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ success: false, error: msg });
+    }
+});
+
+// Delete feedback — admin only, title must contain "test" (case-insensitive)
+// to prevent accidental deletion of real submissions.
+router.delete('/:id', requireAuth, async (req, res) => {
+    try {
+        const user = (req as any).user as JwtPayload;
+        const role = await getFreshRole(user.user_id, user.role);
+        if (role !== 'admin') {
+            res.status(403).json({ success: false, error: 'Admin only' });
+            return;
+        }
+
+        const existing = await query<{ id: string; title: string }>(
+            'SELECT id, title FROM feedback WHERE id = $1',
+            [req.params.id],
+        );
+        if (existing.rows.length === 0) {
+            res.status(404).json({ success: false, error: 'Not found' });
+            return;
+        }
+
+        const title = existing.rows[0].title ?? '';
+        if (!title.toLowerCase().includes('test')) {
+            res.status(403).json({
+                success: false,
+                error: 'Only messages with "test" in the title can be deleted to preserve submission history.',
+            });
+            return;
+        }
+
+        await query('DELETE FROM feedback WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         res.status(500).json({ success: false, error: msg });

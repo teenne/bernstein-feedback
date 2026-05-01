@@ -16,7 +16,12 @@ services:
     region: oregon
     rootDir: server
     buildCommand: npm install --include=dev && npm run build
-    startCommand: npm start
+    # Run migrations before starting the server so new schema changes
+    # (e.g. new tables, indexes, triggers) are applied automatically on
+    # every deploy. `|| true` prevents a migration failure from blocking
+    # the server boot — the server logs the error and continues. Migrations
+    # are idempotent (`CREATE ... IF NOT EXISTS`) so re-runs are safe.
+    startCommand: npm run migrate || true && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV

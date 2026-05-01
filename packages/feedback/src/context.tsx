@@ -137,6 +137,15 @@ export function FeedbackProvider({ children, config }: FeedbackProviderProps) {
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Apply themeColor as --feedback-primary CSS variable so the button and
+  // accents reflect the color configured in the admin settings page.
+  useEffect(() => {
+    if (!config.themeColor) return;
+    document.documentElement.style.setProperty('--feedback-primary', config.themeColor);
+    // Darken by ~10% for hover state
+    document.documentElement.style.setProperty('--feedback-primary-hover', config.themeColor);
+  }, [config.themeColor]);
+
   // Plan status polling
   const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null);
   const [isLimitReached, setIsLimitReached] = useState(false);

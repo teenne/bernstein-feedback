@@ -118,6 +118,39 @@ Key config groups:
 - **Session analytics**: `sessionProvider` — optional; wires PostHog/LogRocket/FullStory session replay into every ticket
 - **Proactive**: `proactive.enabled`, `proactive.rageClick`, `proactive.errorBurst`, `proactive.abandonedFlow`
 
+## Admin App (`apps/admin/`)
+
+### `useFeedbackConfig` hook (`src/hooks/useFeedbackConfig.ts`)
+
+Manages per-project widget config with localStorage + server persistence.
+
+**Critical pattern — `configRef` for stale-closure safety:**
+- `configRef = useRef(config)` shadows the React state synchronously.
+- `updateSetting` updates `configRef.current` **before** calling `setConfig` (not inside the updater). React's `setConfig` updater runs during reconciliation, not synchronously — so if you update the ref inside the updater and call `saveSettings()` in the same tick, the ref still holds the old value.
+- `saveSettings` reads `configRef.current` instead of the closed-over `config`, ensuring it always saves the latest value even when called immediately after `updateSetting()`.
+- `fetchManagedConfig` and the project-switch `useEffect` also write `configRef.current` to keep it in sync.
+
+```ts
+// CORRECT — ref updated before setConfig is scheduled
+const next = { ...configRef.current, [key]: value };
+configRef.current = next;
+setConfig(next);
+
+// WRONG — updater runs during reconciliation, not synchronously
+setConfig(prev => {
+    const next = { ...prev, [key]: value };
+    configRef.current = next; // too late if saveSettings() runs in same tick
+    return next;
+});
+```
+
+### Settings Page — Theme Color (`src/pages/SettingsPage.tsx`)
+
+Theme color UI has three entry points that all feed into `updateSetting("themeColor", value)`:
+1. **Preset swatches** — click to apply directly.
+2. **Native color picker** — `<input type="color">` controlled with `value={config.themeColor}` and `onChange`.
+3. **Hex text input** — local `hexInput` state; applies on valid 6-digit hex, reverts to `config.themeColor` on blur if invalid. Synced to `config.themeColor` via `useEffect` so swatch/picker changes update the field.
+
 ## Documentation
 
 Additional documentation is in `docs/`:

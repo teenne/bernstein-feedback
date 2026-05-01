@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useSubscription } from './useSubscription';
 import { API_URL, useSupabaseDirectly, apiFetch } from '../lib/config';
@@ -52,13 +52,20 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const { isPro, loading, checkSubscription } = useSubscription(projectId);
 
+    // Always holds the latest config synchronously — updated inside the setConfig
+    // updater so it's current even before React re-renders (fixes stale-closure
+    // bug where saveSettings() called right after updateSetting() saved old config).
+    const configRef = useRef(config);
+
     // When the active project changes, do a full config reset then fetch from server
     useEffect(() => {
         if (initialProjectId === projectId) return;
         setProjectId(initialProjectId);
         setHasUnsavedChanges(false);
         // Reset to a clean slate for the new project — no bleed from previous project
-        setConfig(loadFromStorage(initialProjectId));
+        const fresh = loadFromStorage(initialProjectId);
+        configRef.current = fresh;
+        setConfig(fresh);
     }, [initialProjectId]);
 
     // fetchManagedConfig: load project config from server (Supabase direct or Node API)
@@ -74,7 +81,9 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
                     .maybeSingle();
                 if (error) throw error;
                 if (data?.config) {
-                    setConfig({ ...DEFAULT_CONFIG, ...data.config });
+                    const next = { ...DEFAULT_CONFIG, ...data.config };
+                    configRef.current = next;
+                    setConfig(next);
                     // Persist server values to localStorage so they survive a reload
                     localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(data.config));
                 }
@@ -82,7 +91,9 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
                 // Node server mode
                 const json = await apiFetch(`${API_URL}/api/projects/${pid}`);
                 if (json.data?.config) {
-                    setConfig({ ...DEFAULT_CONFIG, ...json.data.config });
+                    const next = { ...DEFAULT_CONFIG, ...json.data.config };
+                    configRef.current = next;
+                    setConfig(next);
                     localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(json.data.config));
                 }
             }
@@ -94,32 +105,38 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
     const enforcedConfig = useMemo(() => config, [config]);
 
     const updateSetting = useCallback(<K extends keyof FeedbackConfigState>(key: K, value: FeedbackConfigState[K]) => {
-        setConfig(prev => {
-            setHasUnsavedChanges(true);
-            return { ...prev, [key]: value };
-        });
+        // Update configRef synchronously NOW — before setConfig is scheduled —
+        // so saveSettings() called in the same tick always reads the new value.
+        // (setConfig updater runs during reconciliation, not synchronously.)
+        const next = { ...configRef.current, [key]: value };
+        configRef.current = next;
+        setConfig(next);
+        setHasUnsavedChanges(true);
     }, []);
 
-    // saveSettings: persists to localStorage + server (Supabase or Node)
+    // saveSettings: persists to localStorage + server (Supabase or Node).
+    // Uses configRef.current (not the closed-over config) so it always saves
+    // the latest value even when called synchronously after updateSetting().
     const saveSettings = useCallback(async (targetProjectId?: string) => {
         const pid = targetProjectId || projectId;
         if (typeof window === 'undefined' || !pid) return;
+        const latest = configRef.current;
         try {
             // Always write localStorage first — instant, works offline
-            localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(config));
+            localStorage.setItem(`${STORAGE_KEY}_${pid}`, JSON.stringify(latest));
 
             if (useSupabaseDirectly && supabase) {
                 // Supabase-direct mode
                 const { error } = await supabase
                     .from('projects')
-                    .update({ config } as any)
+                    .update({ config: latest } as any)
                     .eq('id', pid);
                 if (error) throw error;
             } else {
                 // Node server mode — PATCH projects.config
                 await apiFetch(`${API_URL}/api/projects/${pid}`, {
                     method: 'PATCH',
-                    body: JSON.stringify({ config }),
+                    body: JSON.stringify({ config: latest }),
                 });
             }
 
@@ -128,7 +145,7 @@ export function useFeedbackConfig(initialProjectId: string = 'demo-app') {
             console.warn('[useFeedbackConfig] failed to save config:', error);
             setHasUnsavedChanges(false);
         }
-    }, [config, projectId]);
+    }, [projectId]);
 
     // Apply Dark Mode to <html>
     useEffect(() => {

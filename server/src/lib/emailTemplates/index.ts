@@ -9,19 +9,22 @@ import { RenderedEmail } from './shared';
 import { renderResolveEmail, type ResolveContext } from './resolve';
 import { renderPlanWarningEmail, type PlanWarningContext } from './planWarning';
 import { renderPlanLimitEmail, type PlanLimitContext } from './planLimit';
+import { renderInviteEmail, type InviteContext } from './invite';
 
-export type EmailEventType = 'resolved' | 'plan_warning' | 'plan_limit';
+export type EmailEventType = 'resolved' | 'plan_warning' | 'plan_limit' | 'invite';
 
 export type {
     ResolveContext,
     PlanWarningContext,
     PlanLimitContext,
+    InviteContext,
     RenderedEmail,
 };
 
 export { renderResolveEmail } from './resolve';
 export { renderPlanWarningEmail } from './planWarning';
 export { renderPlanLimitEmail } from './planLimit';
+export { renderInviteEmail } from './invite';
 
 /**
  * Pick and render the email template for a queued row.
@@ -45,6 +48,8 @@ export function renderEmail(
                 return renderPlanWarningEmail(context as unknown as PlanWarningContext);
             case 'plan_limit':
                 return renderPlanLimitEmail(context as unknown as PlanLimitContext);
+            case 'invite':
+                return renderInviteEmail(context as unknown as InviteContext);
             default:
                 return null;
         }

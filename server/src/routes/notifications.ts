@@ -117,6 +117,17 @@ router.post('/subscriptions/:projectId', requireAuth, async (req, res) => {
     try {
         const user = (req as any).user as JwtPayload;
         const { projectId } = req.params;
+
+        // Verify project exists before subscribing — prevents arbitrary ID injection
+        const exists = await query<{ id: string }>(
+            'SELECT id FROM projects WHERE id = $1',
+            [projectId],
+        );
+        if (exists.rows.length === 0) {
+            res.status(404).json({ success: false, error: 'Project not found' });
+            return;
+        }
+
         await query(
             `INSERT INTO project_subscriptions (user_id, project_id)
              VALUES ($1, $2)

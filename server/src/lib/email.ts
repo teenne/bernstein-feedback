@@ -42,6 +42,10 @@ export interface SendEmailOptions {
   subject: string;
   text: string;
   html?: string;
+  // Stable RFC-2822 Message-ID value (without angle brackets).
+  // When set, mail servers and clients that deduplicate by Message-ID
+  // (e.g. Gmail) will discard a retry that carries the same ID.
+  messageId?: string;
 }
 
 export async function sendEmail(opts: SendEmailOptions): Promise<void> {
@@ -58,6 +62,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<void> {
     subject: opts.subject,
     text: opts.text,
     html: opts.html,
+    ...(opts.messageId ? { messageId: opts.messageId } : {}),
   });
 }
 

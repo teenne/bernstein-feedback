@@ -29,7 +29,7 @@ export function Header({
 }: HeaderProps) {
   return (
     <header className="sticky top-0 z-50 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Brand lockup — logo + wordmark sit together on the left */}
         <div className="flex items-center gap-2">
           <img

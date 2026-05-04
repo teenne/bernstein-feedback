@@ -352,7 +352,7 @@ CREATE TABLE email_queue (
   subject     TEXT NOT NULL,
   body_text   TEXT NOT NULL,
   body_html   TEXT,
-  event_type  TEXT NOT NULL CHECK (event_type IN ('resolved', 'plan_warning', 'plan_limit')),
+  event_type  TEXT NOT NULL CHECK (event_type IN ('resolved', 'plan_warning', 'plan_limit', 'invite')),
   context     JSONB,
   project_id  TEXT,
   feedback_id UUID,
@@ -661,6 +661,7 @@ BEGIN
             )
           )
         )
+
     ) r
     WHERE r.recipient_email IS NOT NULL AND r.recipient_email <> ''
     ON CONFLICT (dedupe_key) DO NOTHING;

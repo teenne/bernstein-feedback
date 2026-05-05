@@ -89,11 +89,17 @@ async function processBatch(): Promise<void> {
             // dispatcher doesn't recognize the event type.
             const rendered = renderEmail(row.event_type, row.context);
 
+            // row.id is a UUID stable across retries — using it as the
+            // Message-ID lets mail servers (including Gmail) discard a
+            // duplicate delivery when sent_at update fails and the row
+            // is picked up again on the next poll.
+            const smtpHost = process.env.SMTP_HOST || 'bernstein-feedback';
             await sendEmail({
                 to: row.to_email,
                 subject: rendered?.subject ?? row.subject,
                 text: rendered?.text ?? row.body_text,
                 html: rendered?.html ?? row.body_html ?? undefined,
+                messageId: `${row.id}@${smtpHost}`,
             });
             await query(
                 `UPDATE email_queue SET sent_at = NOW() WHERE id = $1`,

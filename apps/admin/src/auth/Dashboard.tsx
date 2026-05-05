@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 import {
@@ -11,16 +11,18 @@ import { SettingsPage } from "../pages/SettingsPage";
 import { useFeedbackConfig } from "../hooks/useFeedbackConfig";
 import { useAuth } from "../hooks/useAuth";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import type { Project } from "../lib/types";
+import type { Project, UserRole } from "../lib/types";
 
 interface DashboardProps {
   session?: Session | null;
   onProjectSelect?: (projectId: string) => void;
+  onSignOut?: () => void;
 }
 
 export default function Dashboard({
   session,
   onProjectSelect,
+  onSignOut,
 }: DashboardProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +61,9 @@ export default function Dashboard({
   const [memberEmail, setMemberEmail] = useState("");
   const [addingMember, setAddingMember] = useState(false);
   const [addMemberError, setAddMemberError] = useState("");
+  const [allUsers, setAllUsers] = useState<UserRole[]>([]);
+  const [inputFocused, setInputFocused] = useState(false);
+  const addMemberRef = useRef<HTMLDivElement>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string;
     message: string;
@@ -92,9 +97,6 @@ export default function Dashboard({
   const userEmail = session?.user?.email || auth.email || "";
   const userId = session?.user?.id || auth.userId || "";
 
-  const handleSignOut = async () => {
-    await supabase?.auth.signOut();
-  };
 
   const fetchProjects = async () => {
     setLoading(true);
@@ -139,6 +141,38 @@ export default function Dashboard({
     }
   }, [selectedProjectId, fetchManagedConfig]);
 
+  // Fetch all registered users once so admin can pick from a list when adding members
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        if (useSupabaseDirectly) {
+          const { data } = await supabase!
+            .from("user_roles")
+            .select("id, user_id, email, role, created_at, updated_at")
+            .order("email", { ascending: true });
+          setAllUsers((data as UserRole[]) || []);
+        } else {
+          const res = await fetch(`${API_URL}/api/auth/users`, { headers: getAuthHeaders() });
+          const json = await res.json();
+          if (json.success) setAllUsers(json.data || []);
+        }
+      } catch {}
+    })();
+  }, [isAdmin]);
+
+  // Close dropdown on click outside the add-member container
+  useEffect(() => {
+    if (!inputFocused) return;
+    const handler = (e: MouseEvent) => {
+      if (!addMemberRef.current?.contains(e.target as Node)) {
+        setInputFocused(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [inputFocused]);
+
   const fetchMembers = async (projectId: string) => {
     try {
       if (useSupabaseDirectly) {
@@ -161,39 +195,34 @@ export default function Dashboard({
     }
   };
 
-  const handleAddMember = async () => {
-    if (!selectedProjectId || !memberEmail.trim()) return;
+  const handleAddMember = async (emailOverride?: string) => {
+    const email = (emailOverride ?? memberEmail).trim().toLowerCase();
+    if (!selectedProjectId || !email) return;
     setAddingMember(true);
     setAddMemberError("");
+    setInputFocused(false);
     try {
       if (useSupabaseDirectly) {
-        // Look up user_id from user_roles by email
         const { data: userRow } = await supabase!
           .from("user_roles")
           .select("user_id")
-          .eq("email", memberEmail.trim().toLowerCase())
+          .eq("email", email)
           .maybeSingle();
 
         if (!userRow) {
-          setAddMemberError(`No user found with email: ${memberEmail.trim()}`);
+          setAddMemberError(`No user found with email: ${email}`);
           setAddingMember(false);
           return;
         }
 
         const { error } = await supabase!.from("project_members").upsert(
-          {
-            project_id: selectedProjectId,
-            user_id: userRow.user_id,
-            email: memberEmail.trim().toLowerCase(),
-            role: "member",
-          },
+          { project_id: selectedProjectId, user_id: userRow.user_id, email, role: "member" },
           { onConflict: "project_id,user_id" },
         );
 
         if (error) setAddMemberError(error.message);
         else {
           setMemberEmail("");
-          setAddMemberError("");
           fetchMembers(selectedProjectId);
         }
       } else {
@@ -202,15 +231,13 @@ export default function Dashboard({
           {
             method: "POST",
             headers: getAuthHeaders(),
-            body: JSON.stringify({ email: memberEmail.trim().toLowerCase() }),
+            body: JSON.stringify({ email }),
           },
         );
         const json = await res.json();
-        if (!json.success)
-          setAddMemberError(json.error || "Failed to add member");
+        if (!json.success) setAddMemberError(json.error || "Failed to add member");
         else {
           setMemberEmail("");
-          setAddMemberError("");
           fetchMembers(selectedProjectId);
         }
       }
@@ -429,6 +456,15 @@ export default function Dashboard({
     }
   };
 
+  // Registered users not yet in this project, filtered by search text
+  const memberEmailSet = new Set(members.map((m) => m.email.toLowerCase()));
+  const suggestedUsers = allUsers.filter((u) => {
+    if (memberEmailSet.has(u.email.toLowerCase())) return false;
+    if (!memberEmail.trim()) return true;
+    return u.email.toLowerCase().includes(memberEmail.toLowerCase().trim());
+  });
+  const showMemberDropdown = inputFocused && suggestedUsers.length > 0;
+
   return (
     <div className="flex h-[calc(100vh-4rem)] bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans border-t border-gray-200 dark:border-gray-800">
       {/* Sidebar */}
@@ -501,7 +537,7 @@ export default function Dashboard({
 
         <div className="p-4 border-t border-gray-200 dark:border-white/10">
           <button
-            onClick={handleSignOut}
+            onClick={onSignOut}
             className="flex items-center gap-2 w-full px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"
           >
             <svg
@@ -723,26 +759,47 @@ function App() {
                   Team Members
                 </h3>
 
-                {/* Add member */}
-                <div className="flex gap-2 mb-2">
-                  <input
-                    type="email"
-                    value={memberEmail}
-                    onChange={(e) => {
-                      setMemberEmail(e.target.value);
-                      setAddMemberError("");
-                    }}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddMember()}
-                    placeholder="Enter email to add member..."
-                    className={`flex-1 px-3 py-1.5 text-sm rounded-lg border ${addMemberError ? "border-red-400 dark:border-red-500" : "border-gray-300 dark:border-gray-600"} bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none`}
-                  />
-                  <button
-                    onClick={handleAddMember}
-                    disabled={addingMember || !memberEmail.trim()}
-                    className="px-3 py-1.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg transition-colors"
-                  >
-                    {addingMember ? "..." : "Add"}
-                  </button>
+                {/* Add member — search input + registered-user dropdown */}
+                <div ref={addMemberRef} className="relative mb-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={memberEmail}
+                      onChange={(e) => { setMemberEmail(e.target.value); setAddMemberError(""); }}
+                      onClick={() => setInputFocused(true)}
+                      onKeyDown={(e) => e.key === "Enter" && handleAddMember()}
+                      placeholder="Search or type email to add..."
+                      className={`flex-1 px-3 py-1.5 text-sm rounded-lg border ${addMemberError ? "border-red-400 dark:border-red-500" : "border-gray-300 dark:border-gray-600"} bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none`}
+                    />
+                    <button
+                      onClick={() => handleAddMember()}
+                      disabled={addingMember || !memberEmail.trim()}
+                      className="px-3 py-1.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg transition-colors"
+                    >
+                      {addingMember ? "..." : "Add"}
+                    </button>
+                  </div>
+                  {showMemberDropdown && (
+                    <div className="absolute z-30 top-full left-0 right-[52px] mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-44 overflow-y-auto">
+                      {suggestedUsers.map((u) => (
+                        <button
+                          key={u.user_id}
+                          onClick={() => handleAddMember(u.email)}
+                          className="flex items-center gap-2.5 w-full px-3 py-2 text-left hover:bg-amber-50 dark:hover:bg-amber-500/10 transition-colors"
+                        >
+                          <div className="h-7 w-7 shrink-0 rounded-full bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center">
+                            <span className="text-xs font-bold text-amber-600 dark:text-amber-400">
+                              {u.email.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm text-gray-900 dark:text-white truncate">{u.email}</p>
+                            <p className="text-[10px] text-gray-400 uppercase">{u.role}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {addMemberError && (
                   <div className="mb-4 flex items-center gap-2 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-sm px-3 py-2 rounded-lg">

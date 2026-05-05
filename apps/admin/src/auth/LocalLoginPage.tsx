@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { API_URL, SESSION_KEYS } from '../lib/config';
 
 interface LocalLoginPageProps {
@@ -30,6 +30,27 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [inviteToken, setInviteToken] = useState<string | null>(null);
+    const [inviteInvalid, setInviteInvalid] = useState(false);
+
+    // On mount: detect ?invite=TOKEN, validate it, and pre-fill the form
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('invite');
+        if (!token) return;
+        fetch(`${API_URL}/api/auth/invite/${token}`)
+            .then(r => r.json())
+            .then(json => {
+                if (json.success) {
+                    setInviteToken(token);
+                    setEmail(json.data.email);
+                    setMode('register');
+                } else {
+                    setInviteInvalid(true);
+                }
+            })
+            .catch(() => setInviteInvalid(true));
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -53,10 +74,12 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
         setLoading(true);
         try {
             const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+            const body: Record<string, string> = { email: email.toLowerCase(), password };
+            if (mode === 'register' && inviteToken) body.invite_token = inviteToken;
             const res = await fetch(`${API_URL}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: email.toLowerCase(), password }),
+                body: JSON.stringify(body),
             });
 
             const json = await res.json();
@@ -117,12 +140,31 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
                     <img src="/Logo.png" alt="Bernstein" className="relative w-24 h-24 object-contain drop-shadow-2xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 </div>
                 <h2 className="text-4xl font-bold text-gray-900 dark:text-white tracking-tight">
-                    {mode === 'login' ? 'Welcome Back' : 'Create Account'}
+                    {inviteToken ? "You're Invited!" : mode === 'login' ? 'Welcome Back' : 'Create Account'}
                 </h2>
                 <p className="text-gray-500 mt-2 text-base">
-                    {mode === 'login' ? 'Sign in to your feedback dashboard' : 'Set up your admin account'}
+                    {inviteToken
+                        ? 'Create a password to accept your invitation'
+                        : mode === 'login' ? 'Sign in to your feedback dashboard' : 'Set up your admin account'}
                 </p>
             </div>
+
+            {/* Invalid invite banner */}
+            {inviteInvalid && (
+                <div className="relative z-10 w-full max-w-md mb-4 px-4 py-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl text-sm text-red-600 dark:text-red-400 text-center">
+                    This invitation link is invalid or has expired.
+                </div>
+            )}
+
+            {/* Active invite banner */}
+            {inviteToken && (
+                <div className="relative z-10 w-full max-w-md mb-4 px-4 py-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-2xl flex items-center gap-2">
+                    <span className="text-amber-500 text-lg">✉</span>
+                    <p className="text-sm text-amber-700 dark:text-amber-400">
+                        Your email is pre-filled from the invitation. Just set a password to continue.
+                    </p>
+                </div>
+            )}
 
             {/* Glassmorphic Card */}
             <div className="relative z-10 w-full max-w-md bg-white/80 dark:bg-white/5 backdrop-blur-2xl border border-gray-200 dark:border-white/10 rounded-3xl shadow-2xl p-8">
@@ -132,10 +174,11 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
                         <input
                             type="email"
                             value={email}
-                            onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                            onChange={(e) => { if (!inviteToken) { setEmail(e.target.value); setError(''); } }}
                             placeholder="you@example.com"
-                            autoFocus
-                            className="w-full px-3 py-3 border border-gray-200 dark:border-white/10 rounded-lg bg-white dark:bg-black/20 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all"
+                            autoFocus={!inviteToken}
+                            readOnly={!!inviteToken}
+                            className={`w-full px-3 py-3 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none transition-all ${inviteToken ? 'bg-gray-50 dark:bg-white/5 cursor-not-allowed text-gray-500' : 'bg-white dark:bg-black/20 focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500'}`}
                         />
                     </div>
                     <div>
@@ -193,16 +236,18 @@ export default function LocalLoginPage({ onLogin }: LocalLoginPageProps) {
                 </form>
 
                 <div className="mt-6 text-center">
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-                        <button
-                            onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); setConfirmPassword(''); setShowConfirmPassword(false); }}
-                            className="text-amber-500 hover:text-amber-600 font-medium transition-colors"
-                        >
-                            {mode === 'login' ? 'Sign Up' : 'Sign In'}
-                        </button>
-                    </p>
-                    {mode === 'register' && (
+                    {!inviteToken && (
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                            {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+                            <button
+                                onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); setConfirmPassword(''); setShowConfirmPassword(false); }}
+                                className="text-amber-500 hover:text-amber-600 font-medium transition-colors"
+                            >
+                                {mode === 'login' ? 'Sign Up' : 'Sign In'}
+                            </button>
+                        </p>
+                    )}
+                    {mode === 'register' && !inviteToken && (
                         <p className="text-xs text-gray-400 mt-2">
                             First account automatically becomes admin.
                         </p>

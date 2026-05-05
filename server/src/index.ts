@@ -55,6 +55,16 @@ app.use(cors({
         ? process.env.ALLOWED_ORIGINS.split(',')
         : '*',
 }));
+
+// Security headers — applied to every response
+app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '0'); // tells modern browsers to rely on CSP, not the broken legacy filter
+    next();
+});
+
 // Capture the raw body alongside the parsed JSON so HMAC signature
 // checks (e.g. PostHog webhook) can run against the exact bytes the
 // sender signed. Adds < 1ms overhead on a normal request.

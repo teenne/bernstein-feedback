@@ -26,7 +26,7 @@ const router = Router();
 // ──────────────────────────────
 
 // List members of a project
-router.get('/:id/members', requireAuth, async (req, res) => {
+router.get('/:id/members', requireAuth, requireProjectOwner, async (req, res) => {
     try {
         const result = await query<ProjectMember>(
             'SELECT * FROM project_members WHERE project_id = $1 ORDER BY created_at ASC',
@@ -40,7 +40,7 @@ router.get('/:id/members', requireAuth, async (req, res) => {
 });
 
 // Add member to project
-router.post('/:id/members', requireAuth, async (req, res) => {
+router.post('/:id/members', requireAuth, requireProjectOwner, async (req, res) => {
     try {
         const { user_id, email, role } = AddMemberSchema.parse(req.body);
 
@@ -73,7 +73,7 @@ router.post('/:id/members', requireAuth, async (req, res) => {
 });
 
 // Remove member from project
-router.delete('/:id/members/:user_id', requireAuth, async (req, res) => {
+router.delete('/:id/members/:user_id', requireAuth, requireProjectOwner, async (req, res) => {
     try {
         const result = await query<Pick<ProjectMember, 'id'>>(
             'DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING id',
@@ -561,7 +561,7 @@ router.post(
                 submission_count: row.submission_count,
                 is_auto_resolvable: row.is_auto_resolvable,
                 repo_url: row.repo_url ?? null,
-                callback_url: `${req.protocol}://${req.get('host')}/api/v1/agent/${req.params.id}/clusters/${row.cluster_id}/propose-fix`,
+                callback_url: `${process.env.APP_URL || process.env.ALLOWED_ORIGINS?.split(',')[0]?.trim() || ''}/api/v1/agent/${req.params.id}/clusters/${row.cluster_id}/propose-fix`,
                 triggered_by: user.email,
                 triggered_at: new Date().toISOString(),
             };

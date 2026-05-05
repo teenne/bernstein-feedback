@@ -154,6 +154,8 @@ export async function bulkPatchFeedback(
             updates.status = patch.status;
             if (patch.status === 'resolved' || patch.status === 'closed') {
                 updates.resolved_at = new Date().toISOString();
+                const { data: { user } } = await supabase!.auth.getUser();
+                updates.resolved_by = user?.email ?? null;
                 if (patch.resolution_note !== undefined) updates.resolution_note = patch.resolution_note;
             } else {
                 updates.resolved_at = null;
@@ -299,6 +301,8 @@ export async function updateFeedbackStatus(id: string, status: string, resolutio
         const updates: any = { status };
         if (status === 'resolved' || status === 'closed') {
             updates.resolved_at = new Date().toISOString();
+            const { data: { user } } = await supabase!.auth.getUser();
+            updates.resolved_by = user?.email ?? null;
             // Persist the note on the feedback row so the `on_feedback_resolved`
             // Postgres trigger can read it and include it in the notification
             // message. This keeps the trigger as the single source of truth
@@ -429,11 +433,13 @@ export async function approveClusterFix(clusterId: string): Promise<{ closed_cou
         const fix = (cluster as any)?.proposed_fix;
         if (!fix) throw new Error('No proposed_fix on this cluster. Ask the agent to submit one first.');
         const note = fix.summary ? `Auto-fix: ${fix.summary}` : 'Auto-fix approved';
+        const { data: { user: resolverUser } } = await supabase!.auth.getUser();
         const { data, error } = await supabase!
             .from('feedback')
             .update({
                 status: 'resolved',
                 resolved_at: new Date().toISOString(),
+                resolved_by: resolverUser?.email ?? null,
                 resolution_note: note,
             })
             .eq('cluster_id', clusterId)

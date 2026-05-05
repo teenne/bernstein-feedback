@@ -6,9 +6,10 @@ import Dashboard from './Dashboard';
 
 interface AuthGatewayProps {
     onProjectSelect?: (projectId: string) => void;
+    onSignOut?: () => void;
 }
 
-export default function AuthGateway({ onProjectSelect }: AuthGatewayProps = {}) {
+export default function AuthGateway({ onProjectSelect, onSignOut }: AuthGatewayProps = {}) {
     const [session, setSession] = useState<Session | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -44,12 +45,12 @@ export default function AuthGateway({ onProjectSelect }: AuthGatewayProps = {}) 
 
     // No Supabase — render Dashboard with local auth (no session needed)
     if (!supabase) {
-        return <Dashboard onProjectSelect={onProjectSelect} />;
+        return <Dashboard onProjectSelect={onProjectSelect} onSignOut={onSignOut} />;
     }
 
     if (!session) {
         return <LoginPage />;
     }
 
-    return <Dashboard session={session} onProjectSelect={onProjectSelect} />;
+    return <Dashboard session={session} onProjectSelect={onProjectSelect} onSignOut={onSignOut} />;
 }

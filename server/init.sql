@@ -352,7 +352,7 @@ CREATE TABLE email_queue (
   subject     TEXT NOT NULL,
   body_text   TEXT NOT NULL,
   body_html   TEXT,
-  event_type  TEXT NOT NULL CHECK (event_type IN ('resolved', 'plan_warning', 'plan_limit', 'invite')),
+  event_type  TEXT NOT NULL CHECK (event_type IN ('resolved', 'plan_warning', 'plan_limit', 'invite', 'new_feedback')),
   context     JSONB,
   project_id  TEXT,
   feedback_id UUID,
@@ -676,7 +676,77 @@ CREATE TRIGGER on_feedback_resolved_email
   FOR EACH ROW EXECUTE FUNCTION public.queue_email_on_feedback_resolved();
 
 -- ============================================================
--- Email trigger 2: project_usage crosses 80% / 100% → email to owner
+-- Email trigger 2: new feedback → email to subscribed team members
+-- Recipients: users who explicitly opted in via the bell icon
+-- (project_subscriptions). Owner/admin/member who did NOT subscribe
+-- still get the in-app bell notification but no email.
+-- Dedupe key: new_feedback:<feedback_id>:<email> — one email per
+-- submission per subscriber, safe against duplicate INSERT retries.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.queue_email_on_new_feedback()
+RETURNS TRIGGER AS $$
+DECLARE
+  project_name TEXT;
+  type_label   TEXT;
+BEGIN
+  SELECT COALESCE(name, id) INTO project_name
+    FROM public.projects WHERE id = NEW.project_id;
+
+  type_label := CASE NEW.type
+    WHEN 'bug_report'      THEN 'bug report'
+    WHEN 'feature_request' THEN 'feature request'
+    ELSE                        'feedback'
+  END;
+
+  INSERT INTO public.email_queue
+    (to_email, subject, body_text, event_type, context, project_id, feedback_id, dedupe_key)
+  SELECT
+    recipient_email,
+    'New ' || type_label || ' in ' || COALESCE(project_name, NEW.project_id) ||
+      ': "' || COALESCE(NEW.title, '(no title)') || '"',
+    'Hi,' || E'\n\n' ||
+      'A new ' || type_label || ' was just submitted in ' ||
+      COALESCE(project_name, NEW.project_id) || '.' || E'\n\n' ||
+      '  "' || COALESCE(NEW.title, '(no title)') || '"' || E'\n\n' ||
+      '— Bernstein Feedback',
+    'new_feedback',
+    jsonb_build_object(
+      'project_id',          NEW.project_id,
+      'project_name',        COALESCE(project_name, NEW.project_id),
+      'feedback_id',         NEW.id,
+      'feedback_title',      COALESCE(NEW.title, '(no title)'),
+      'feedback_type',       NEW.type,
+      'description_preview', LEFT(COALESCE(NEW.description, ''), 200),
+      'submitted_at',        NEW.created_at
+    ),
+    NEW.project_id,
+    NEW.id,
+    'new_feedback:' || NEW.id::text || ':' || recipient_email
+  FROM (
+    -- Subscribed team members: look up email from user_roles
+    SELECT DISTINCT ur.email AS recipient_email
+      FROM public.project_subscriptions ps
+      JOIN public.user_roles ur ON ur.user_id = ps.user_id
+     WHERE ps.project_id = NEW.project_id
+       AND ur.email IS NOT NULL
+       AND ur.email <> ''
+       -- Don't email the submitter about their own submission
+       AND ps.user_id <> COALESCE(NEW.user_id, '')
+  ) r
+  WHERE r.recipient_email IS NOT NULL
+  ON CONFLICT (dedupe_key) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_new_feedback_email ON public.feedback;
+CREATE TRIGGER on_new_feedback_email
+  AFTER INSERT ON public.feedback
+  FOR EACH ROW EXECUTE FUNCTION public.queue_email_on_new_feedback();
+
+-- ============================================================
+-- Email trigger 3: project_usage crosses 80% / 100% → email to owner
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.queue_email_on_plan_usage()
 RETURNS TRIGGER AS $$
